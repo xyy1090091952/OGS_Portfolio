@@ -1,0 +1,36 @@
+/* 原创程序封面，不依赖外部图片服务。三个独立形体组合成每张光盘的视觉。 */
+.cover-art { position: absolute; inset: 0; overflow: hidden; border-radius: 50%; }
+.art-form { display: block; position: absolute; }
+.art-grain { position: absolute; inset: 0; opacity: .12; background: repeating-radial-gradient(circle at 31% 37%, transparent 0 1px, #fff7 1.3px, transparent 1.7px 3px); mix-blend-mode: soft-light; }
+
+/* 红色唱片：抛光金属带与玻璃球，明暗条纹模拟环境反射。 */
+.art-motion { background: radial-gradient(ellipse at 78% 20%, #ed7355 0, #c03c28 40%, #781711 100%); }
+.art-motion .form-a { width: 87%; height: 36%; top: 29%; left: 17%; border-radius: 50%; transform: rotate(-42deg); background: linear-gradient(180deg, #191d1e 0%, #f3f8f3 3%, #9badae 7%, #242a2c 14%, #758588 17%, #e5eff0 22%, #819699 26%, #252f35 32%, #d3e2e1 36%, #fffef3 39%, #59676c 44%, #080e13 48%, #4a5359 54%, #acb3b6 62%, #eef3ee 71%, #9aafb0 77%, #233c3c 84%, #090c10 89%, #a6b8b8 94%, #f6f5ed 97%, #505e61 100%); box-shadow: 4px 14px 20px #370b1677, inset 0 1px 1px #fff; }
+.art-motion .form-a::after { content: ''; position: absolute; inset: 24% 9%; border-radius: 50%; background: linear-gradient(180deg,#831d16,#d4523d); box-shadow: inset 3px 7px 8px #190c09b0, 0 2px 3px #ecf2e9; }
+.art-motion .form-b { width: 40%; height: 40%; border-radius: 50%; top: 14%; left: 47%; background: radial-gradient(circle at 27% 22%, #fff1 3%, #ffdfaa 4%, #f6a188 5%, #d5493070 13%, #931208ba 40%, #fc8b5d 63%, #661608 83%, #d7754e 96%); box-shadow: inset -4px -5px 7px #f69f6b, inset 4px 3px 7px #ffd4b180, 12px 20px 20px #5e16097a; }
+.art-motion .form-c { width: 43%; height: 15%; top: 45%; left: 13%; border-radius: 45%; transform: rotate(-41deg); background: linear-gradient(180deg, #d2d9da, #8b989c 8%, #eff5f3 14%, #9da8b0 23%, #1b2732 28%, #080d15 60%, #768989 84%, #ebf5e8 91%, #414c52); box-shadow: 1px 4px 5px #300b1644; }
+
+/* 绿色唱片：三片卷曲的叶面，薄边高光建立自然形态。 */
+.art-nature { background: radial-gradient(ellipse at 80% 15%, #3b5241, #14291f 60%, #081d17); }
+.art-nature .form-a { width: 71%; height: 64%; top: 15%; left: 32%; border-radius: 0 90% 8% 90%; transform: rotate(-27deg); background: linear-gradient(130deg, #f7f5ae 0%, #dfe9a7 18%, #aebc77 34%, #60713b 50%, #203a1c 56%, #afc975 64%, #f1f4bd 75%, #c8d893 90%); box-shadow: -3px -2px 1px #e9f2af, 0 16px 30px #0007; }
+.art-nature .form-b { width: 58%; height: 46%; top: 4%; left: 19%; border-radius: 0 95% 0 100%; transform: rotate(29deg); background: linear-gradient(142deg, #ffffd8 3%, #e6efb5 24%, #94a767 48%, #455b38 58%, #c9d795 66%, #eef6b0 71%, #76905c 84%); box-shadow: -1px -2px 1px #faffc2, 8px 15px 20px #0d251c77; }
+.art-nature .form-c { width: 2px; height: 67%; top: 28%; left: 71%; transform: rotate(26deg); border-radius: 50%; background: linear-gradient(#ecf0af, #94a867 60%, transparent); }
+
+/* 蓝色唱片：连续褶皱，使用偏移后的明暗构成织物的空间感。 */
+.art-digital { background: radial-gradient(ellipse at 70% 15%, #4568ed, #1d36a8 55%, #081046); }
+.art-digital .form-a { width: 92%; height: 135%; top: -15%; left: 26%; border-radius: 42%; transform: rotate(28deg); background: repeating-linear-gradient(90deg, #050e55 0%, #0c258b 4%, #436ded 9%, #85a1ff 12%, #476aef 14%, #102b99 18%, #050d55 24%); box-shadow: -4px 3px 13px #091456aa; }
+.art-digital .form-b { width: 130%; height: 48%; top: 7%; left: -37%; border-radius: 50%; transform: rotate(-34deg); background: linear-gradient(176deg, #b1c6ff 0%, #436cfc 7%, #103fa8 17%, #122773 35%, #6587ed 50%, #244cc9 61%, #192470 71%, #10164b 80%, #4968bc 92%, #9db3f5); box-shadow: 3px 15px 20px #080e5288, inset 0 1px 1px #acbfff; }
+.art-digital .form-c { width: 140%; height: 24%; left: 6%; top: 72%; transform: rotate(-39deg); border-radius: 50%; background: linear-gradient(#051147, #174ad3 32%, #8bb6ff 50%, #3068f3 54%, #082474 70%, #06143f); box-shadow: 4px 12px 16px #060b3988; }
+
+/* 沙色唱片：日光和沙丘，仅以层次与尺度制造叙事。 */
+.art-film { background: linear-gradient(#d49d73, #f3d9af 62%, #e3b38b); }
+.art-film .form-a { width: 27%; height: 27%; top: 18%; left: 58%; border-radius: 50%; background: #f8e9c8; box-shadow: 0 0 35px #fbeac8aa; }
+.art-film .form-b { width: 130%; height: 67%; left: -10%; top: 47%; border-radius: 80% 0 0 0; transform: rotate(-16deg); background: linear-gradient(157deg, #f8deb0 9%, #d19b67 32%, #875237 53%, #c99362); box-shadow: -1px -2px 1px #f8e4bd; }
+.art-film .form-c { width: 113%; height: 67%; left: 28%; top: 59%; transform: rotate(25deg); border-radius: 85% 0 0 0; background: linear-gradient(155deg, #f3d4a1, #e3bc8b 23%, #c18d5a 41%, #84563d 78%); box-shadow: -1px -2px 2px #ffe7c2; }
+
+/* 紫色唱片：透明环以多层内外反射表现玻璃边缘。 */
+.art-graphic { background: radial-gradient(ellipse at 78% 12%, #ba87ba, #65457e 45%, #281b49); }
+.art-graphic .art-form { width: 57%; height: 57%; border-radius: 50%; background: radial-gradient(circle, transparent 42%, #d7b2e822 43%, #ead4ff 44%, #80589a 45%, #ceb0e199 49%, #48315e66 54%, #e9cbff99 62%, #694188 66%, #e8b7fa 68%, transparent 70%); box-shadow: 11px 14px 18px #2912385c, inset 2px -2px 3px #e8c2fc44; }
+.art-graphic .form-a { left: 39%; top: 12%; transform: rotate(-35deg) scaleX(.8); }
+.art-graphic .form-b { left: 6%; top: 29%; transform: rotate(39deg) scaleX(.7); }
+.art-graphic .form-c { left: 43%; top: 46%; transform: rotate(38deg) scaleX(.66); }
