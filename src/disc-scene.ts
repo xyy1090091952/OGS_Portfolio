@@ -1,29 +1,34 @@
 import {
-  AmbientLight, DirectionalLight, Euler, Group, MathUtils, PerspectiveCamera,
-  PMREMGenerator, Quaternion, Raycaster, Scene, Vector2, Vector3, WebGLRenderer,
+  ACESFilmicToneMapping, AmbientLight, DirectionalLight, Euler, Group, MathUtils, PerspectiveCamera,
+  Quaternion, Raycaster, Scene, Vector2, Vector3, WebGLRenderer,
   type WebGLRenderTarget,
 } from 'three';
-import { RoomEnvironment } from 'three/addons/environments/RoomEnvironment.js';
-import { createDiscModel, DISC_3D, type DiscModel } from './disc-model';
+import { createDiscModel, type DiscModel } from './disc-model';
+import { DISC_3D } from './disc-config';
+import { createDiscEnvironment } from './disc-materials';
+import { DiscHighlight } from './disc-highlight';
+import { getDiscPlacement, getGalleryLayout, type GalleryLayout } from './disc-layout';
+import { GALLERY_LAYOUT, GALLERY_MOTION } from './gallery-config';
 import { PROJECTS, type Project } from './data';
 
 interface Pose {
   model: DiscModel;
   mount: Group;
+  flow: Group;
+  lean: number;
+  followProgress: number;
+  response: Group;
+  hover: Vector3;
+  hoverTarget: Vector3;
+  hoverVelocity: Vector3;
+  perspectiveScale: number;
   velocity: Vector3;
   from: Quaternion;
   target: Quaternion | null;
   elapsed: number;
 }
 
-export interface GalleryLayout {
-  size: number;
-  spacing: number;
-  slope: number;
-  mobile: boolean;
-}
-
-const BASE_ROTATION = new Quaternion().setFromEuler(new Euler(.07, -.54, -.42, 'ZYX'));
+const BASE_ROTATION = new Quaternion().setFromEuler(new Euler(-Math.PI / 6, -Math.PI / 6, 0));
 const Y_AXIS = new Vector3(0, 1, 0);
 
 /** 渲染层不管理作品选择；只接收画廊的位置，并维护每张光盘自己的三维姿态。 */
@@ -37,11 +42,17 @@ export class DiscScene {
   private models = new Map<string, Pose>();
   private raycaster = new Raycaster();
   private projects: Project[] = [];
-  private layout: GalleryLayout = { size: 600, spacing: 500, slope: -.46, mobile: false };
+  private layout: GalleryLayout = getGalleryLayout(1440, 900);
   private progress = 0;
+  private flowVelocity = 0;
+  private layoutBusy = false;
   private width = 0;
   private height = 0;
   private dragging: string | null = null;
+  private hoverPoint: Vector2 | null = null;
+  private hoverDirty = false;
+  private hovered: string | null = null;
+  private highlight: DiscHighlight;
   private lost = false;
   private reduced = matchMedia('(prefers-reduced-motion: reduce)');
 
@@ -53,15 +64,19 @@ export class DiscScene {
     this.renderer = new WebGLRenderer({ alpha: true, antialias: true, powerPreference: 'high-performance' });
     this.renderer.setPixelRatio(Math.min(devicePixelRatio, DISC_3D.pixelRatioLimit));
     this.renderer.setClearColor(0, 0);
+    this.renderer.toneMapping = ACESFilmicToneMapping;
+    this.renderer.toneMappingExposure = 1.05;
     this.element = this.renderer.domElement;
     this.element.className = 'disc-webgl-canvas';
     // 显隐交由页面样式控制，避免 Three.js 默认的内联 display 覆盖回退状态。
     this.element.style.removeProperty('display');
     this.element.setAttribute('aria-hidden', 'true');
-    this.environment = this.makeEnvironment();
+    this.environment = createDiscEnvironment(this.renderer);
     this.scene.environment = this.environment.texture;
-    this.scene.add(new AmbientLight('#ffffff', .7));
-    const key = new DirectionalLight('#ffffff', 1.8);
+    this.highlight = new DiscHighlight(this.wake);
+    this.scene.add(this.highlight.group);
+    this.scene.add(new AmbientLight('#ffffff', .45));
+    const key = new DirectionalLight('#ffffff', 1.4);
     key.position.set(-500, 700, 1500);
     this.scene.add(key);
     const fill = new DirectionalLight('#e2eeff', .6);
@@ -75,7 +90,7 @@ export class DiscScene {
     });
     this.element.addEventListener('webglcontextrestored', () => {
       this.environment.dispose();
-      this.environment = this.makeEnvironment();
+      this.environment = createDiscEnvironment(this.renderer);
       this.scene.environment = this.environment.texture;
       this.lost = false;
       this.availability(true);
@@ -83,27 +98,28 @@ export class DiscScene {
     });
   }
 
-  private makeEnvironment() {
-    const room = new RoomEnvironment();
-    const generator = new PMREMGenerator(this.renderer);
-    const map = generator.fromScene(room, .04);
-    room.dispose();
-    generator.dispose();
-    return map;
-  }
-
   setProjects(projects: Project[]) {
+    this.clearHover();
+    this.highlight.hide();
     this.projects = projects;
     this.models.forEach(pose => { pose.mount.visible = false; });
     projects.forEach(project => {
       if (!this.models.has(project.id)) {
         const model = createDiscModel(project, PROJECTS.indexOf(project), this.wake);
         const mount = new Group();
-        mount.add(model.group);
+        // 陈列位置 > 运动倾斜 > 悬停反馈 > 手动旋转，临时效果不会累积到手动姿态。
+        const flow = new Group();
+        const response = new Group();
+        response.add(model.group);
+        flow.add(response);
+        mount.add(flow);
         this.scene.add(mount);
         model.group.quaternion.copy(BASE_ROTATION);
         this.models.set(project.id, {
-          model, mount, velocity: new Vector3(), from: new Quaternion(), target: null, elapsed: 0,
+          model, mount, flow, lean: 0, followProgress: this.progress,
+          response, hover: new Vector3(), hoverTarget: new Vector3(), hoverVelocity: new Vector3(),
+          perspectiveScale: 1,
+          velocity: new Vector3(), from: new Quaternion(), target: null, elapsed: 0,
         });
       }
       this.models.get(project.id)!.mount.visible = true;
@@ -111,26 +127,59 @@ export class DiscScene {
     this.host.append(this.element);
   }
 
-  updateLayout(layout: GalleryLayout, progress: number) {
+  updateLayout(layout: GalleryLayout, progress: number, velocity = 0, dt = 0) {
+    const changedMode = this.layout.mode !== layout.mode;
     this.layout = layout;
+    if (Math.abs(progress - this.progress) > .001 && this.hoverPoint) this.hoverDirty = true;
     this.progress = progress;
+    this.flowVelocity = velocity;
+    this.layoutBusy = false;
     const width = this.host.clientWidth, height = this.host.clientHeight;
     if (!width || !height || this.lost) return;
-    if (this.width !== width || this.height !== height) {
+    const ratioLimit = width <= GALLERY_LAYOUT.phoneWidth ? DISC_3D.mobilePixelRatioLimit : DISC_3D.pixelRatioLimit;
+    const ratio = Math.min(devicePixelRatio, ratioLimit, Math.sqrt(DISC_3D.maxRenderPixels / (width * height)));
+    const resized = this.width !== width || this.height !== height || this.renderer.getPixelRatio() !== ratio;
+    if (resized) {
       this.width = width; this.height = height;
+      this.renderer.setPixelRatio(ratio);
       this.renderer.setSize(width, height);
       this.camera.aspect = width / height;
       this.camera.position.z = height / (2 * Math.tan(MathUtils.degToRad(this.camera.fov / 2)));
       this.camera.updateProjectionMatrix();
     }
+    let near = Infinity, far = 0;
     this.projects.forEach((project, index) => {
       const pose = this.models.get(project.id)!;
       const offset = index - progress;
-      pose.mount.visible = Math.abs(offset) < (layout.mobile ? 1.7 : 2.5);
-      const size = layout.size * MathUtils.clamp(1 + offset * .07, .65, 1.25);
-      pose.mount.scale.setScalar(size / 2);
-      pose.mount.position.set(offset * layout.spacing, -offset * layout.spacing * layout.slope - (layout.mobile ? height * .03 : 0), 0);
+      const wasVisible = pose.mount.visible;
+      pose.mount.visible = Math.abs(offset) < layout.visibleRange;
+      if (!pose.mount.visible) return;
+      const flow = GALLERY_MOTION.flow;
+      const follow = Math.max(flow.minFollow, flow.discFollow - Math.abs(offset) * flow.distanceFalloff);
+      if (!dt || changedMode || resized || !wasVisible || this.reduced.matches) pose.followProgress = progress;
+      else {
+        pose.followProgress += (progress - pose.followProgress) * (1 - Math.exp(-follow * dt / 1000));
+        pose.followProgress = MathUtils.clamp(pose.followProgress, progress - flow.maxLag, progress + flow.maxLag);
+        if (Math.abs(pose.followProgress - progress) < GALLERY_MOTION.settleEpsilon) pose.followProgress = progress;
+      }
+      if (pose.followProgress !== progress) this.layoutBusy = true;
+      // 深度以公共 offset 分配，少量跟随只改变屏幕位置，任意旋转仍不相交。
+      const placement = getDiscPlacement(layout, offset, this.camera.position.z, index - pose.followProgress);
+      pose.perspectiveScale = placement.perspectiveScale;
+      pose.mount.scale.setScalar(placement.radius);
+      pose.mount.position.set(placement.x, placement.y, placement.z);
+      near = Math.min(near, placement.near);
+      far = Math.max(far, placement.far);
     });
+    // 相机只覆盖可见光盘的深度区间，保留薄盘面需要的深度精度。
+    if (Number.isFinite(near) && far > 0) {
+      const nextNear = Math.max(1, near * .8), nextFar = far * 1.1;
+      if (this.camera.near !== nextNear || this.camera.far !== nextFar) {
+        this.camera.near = nextNear;
+        this.camera.far = nextFar;
+        this.camera.updateProjectionMatrix();
+      }
+    }
   }
 
   /** 射线命中真实几何，光盘中心的孔和外侧空白不会被误认为光盘表面。 */
@@ -149,10 +198,80 @@ export class DiscScene {
     return object.userData.projectId ?? null;
   }
 
+  hoverAt(clientX: number, clientY: number) {
+    if (this.dragging || this.lost) return;
+    this.hoverPoint = new Vector2(clientX, clientY);
+    this.hoverDirty = true;
+    this.wake();
+  }
+
+  clearHover() {
+    this.hoverPoint = null;
+    this.hovered = null;
+    this.hoverDirty = false;
+    this.models.forEach(pose => pose.hoverTarget.set(0, 0, 0));
+    this.host.classList.remove('is-over-disc');
+    this.wake();
+  }
+
+  private updateHoverTarget() {
+    if (!this.hoverDirty || !this.hoverPoint) return;
+    this.hoverDirty = false;
+    const { x, y } = this.hoverPoint;
+    this.hovered = this.hitTest(x, y);
+    this.host.classList.toggle('is-over-disc', !!this.hovered);
+    this.models.forEach(pose => pose.hoverTarget.set(0, 0, 0));
+    if (!this.hovered || this.reduced.matches) return;
+    const pose = this.models.get(this.hovered)!;
+    const bounds = this.host.getBoundingClientRect();
+    const center = pose.mount.position.clone().project(this.camera);
+    const centerX = bounds.left + (center.x + 1) * this.width / 2;
+    const centerY = bounds.top + (1 - center.y) * this.height / 2;
+    const radius = pose.mount.scale.x / pose.perspectiveScale;
+    pose.hoverTarget.set(
+      MathUtils.clamp(-(y - centerY) / radius, -1, 1) * DISC_3D.hoverTilt,
+      MathUtils.clamp((x - centerX) / radius, -1, 1) * DISC_3D.hoverTilt,
+      1,
+    );
+  }
+
+  private stepHover(pose: Pose, dt: number) {
+    if (this.reduced.matches) {
+      pose.hover.set(0, 0, 0);
+      pose.hoverVelocity.set(0, 0, 0);
+    } else {
+      // 小步长积分让 60Hz / 120Hz 与偶发掉帧下的回弹速度接近。
+      const steps = Math.max(1, Math.ceil(dt / 8));
+      const h = dt / steps / 1000;
+      for (let i = 0; i < steps; i++) {
+        pose.hoverVelocity.addScaledVector(pose.hoverTarget.clone().sub(pose.hover), DISC_3D.hoverSpring * h);
+        pose.hoverVelocity.multiplyScalar(Math.exp(-DISC_3D.hoverDamping * h));
+        pose.hover.addScaledVector(pose.hoverVelocity, h);
+      }
+    }
+    const busy = pose.hover.distanceTo(pose.hoverTarget) > DISC_3D.hoverEpsilon || pose.hoverVelocity.length() > DISC_3D.hoverEpsilon;
+    if (!busy && !this.reduced.matches) {
+      pose.hover.copy(pose.hoverTarget);
+      pose.hoverVelocity.set(0, 0, 0);
+    }
+    pose.response.rotation.set(pose.hover.x, pose.hover.y, -pose.hover.y * .12);
+    pose.response.position.z = pose.hover.z * DISC_3D.hoverLift * pose.perspectiveScale / Math.max(1, pose.mount.scale.x);
+    pose.response.scale.setScalar(1 + pose.hover.z * DISC_3D.hoverScale);
+    return !this.reduced.matches && busy;
+  }
+
   beginRotation(id: string) {
     const pose = this.models.get(id);
     if (!pose) return;
     this.dragging = id;
+    // 接住当前看到的角度，避免从 hover 切换为拖拽时突然跳一下。
+    pose.model.group.quaternion.premultiply(pose.response.quaternion).premultiply(pose.flow.quaternion).normalize();
+    pose.flow.quaternion.identity();
+    pose.lean = 0;
+    pose.hover.x = pose.hover.y = 0;
+    pose.hoverVelocity.set(0, 0, 0);
+    pose.response.quaternion.identity();
+    this.clearHover();
     pose.target = null;
     pose.velocity.set(0, 0, 0);
   }
@@ -161,9 +280,10 @@ export class DiscScene {
     const pose = this.models.get(id);
     if (!pose) return;
     const sensitivity = DISC_3D.dragRadiansPerDiameter / this.layout.size;
-    const index = this.projects.findIndex(project => project.id === id);
-    const centerX = this.width / 2 + (index - this.progress) * this.layout.spacing;
-    const centerY = this.height * (this.layout.mobile ? .53 : .5) + (index - this.progress) * this.layout.spacing * this.layout.slope;
+    const bounds = this.host.getBoundingClientRect();
+    const center = pose.mount.position.clone().project(this.camera);
+    const centerX = bounds.left + (center.x + 1) * this.width / 2;
+    const centerY = bounds.top + (1 - center.y) * this.height / 2;
     const radialX = (clientX - centerX) / this.layout.size;
     const radialY = (clientY - centerY) / this.layout.size;
     const delta = new Vector3(dy * sensitivity, dx * sensitivity, (radialY * dx - radialX * dy) * sensitivity * .6);
@@ -192,6 +312,7 @@ export class DiscScene {
   }
 
   private animateTo(pose: Pose, target: Quaternion) {
+    this.clearHover();
     pose.velocity.set(0, 0, 0);
     pose.from.copy(pose.model.group.quaternion);
     pose.target = target.clone();
@@ -208,9 +329,18 @@ export class DiscScene {
 
   step(dt: number, selectedId: string): boolean {
     if (this.lost || !this.width) return false;
-    let busy = false;
+    this.updateHoverTarget();
+    let busy = this.layoutBusy;
     this.models.forEach((pose, id) => {
       if (!pose.mount.visible) return;
+      const flow = GALLERY_MOTION.flow;
+      const targetLean = this.reduced.matches || this.dragging === id ? 0
+        : -Math.sign(this.flowVelocity) * Math.min(flow.maxLean, Math.sqrt(Math.abs(this.flowVelocity)) * flow.lean);
+      pose.lean = this.reduced.matches ? 0 : MathUtils.lerp(pose.lean, targetLean, 1 - Math.exp(-flow.follow * dt / 1000));
+      if (Math.abs(pose.lean - targetLean) < GALLERY_MOTION.settleEpsilon) pose.lean = targetLean;
+      else busy = true;
+      pose.flow.rotation.set(Math.abs(pose.lean) * flow.dip, pose.lean, pose.lean * flow.bank);
+      if (this.stepHover(pose, dt)) busy = true;
       if (pose.target) {
         pose.elapsed += dt;
         const t = this.reduced.matches ? 1 : Math.min(1, pose.elapsed / DISC_3D.flipDuration);
@@ -229,20 +359,40 @@ export class DiscScene {
     });
     const selected = this.models.get(selectedId);
     if (selected) {
-      const normal = new Vector3(0, 0, 1).applyQuaternion(selected.model.group.quaternion);
+      const visibleRotation = selected.model.group.quaternion.clone().premultiply(selected.response.quaternion).premultiply(selected.flow.quaternion);
+      const normal = new Vector3(0, 0, 1).applyQuaternion(visibleRotation);
       this.element.dataset.face = normal.z >= 0 ? 'front' : 'back';
-      this.element.dataset.orientation = selected.model.group.quaternion.toArray().map(n => n.toFixed(4)).join(',');
+      this.element.dataset.orientation = visibleRotation.toArray().map(n => n.toFixed(4)).join(',');
+      this.element.dataset.hover = this.hovered ?? '';
+      this.element.dataset.hoverOffset = selected.hover.toArray().map(n => n.toFixed(4)).join(',');
+      this.element.dataset.flow = selected.lean.toFixed(4);
     }
+    const highlighted = this.hovered ? this.models.get(this.hovered) : null;
+    this.scene.updateMatrixWorld(true);
+    if (this.reduced.matches || this.dragging) this.highlight.hide();
+    else this.highlight.update(highlighted?.mount.visible ? highlighted.model.group : null, performance.now());
     this.renderer.render(this.scene, this.camera);
     return busy;
   }
 
   pause() {
     this.dragging = null;
-    this.models.forEach(pose => { pose.velocity.set(0, 0, 0); });
+    this.clearHover();
+    this.highlight.hide();
+    this.models.forEach(pose => {
+      pose.velocity.set(0, 0, 0);
+      pose.lean = 0;
+      pose.flow.quaternion.identity();
+      pose.hover.set(0, 0, 0);
+      pose.hoverVelocity.set(0, 0, 0);
+      pose.response.quaternion.identity();
+      pose.response.position.z = 0;
+      pose.response.scale.setScalar(1);
+    });
   }
 
   dispose() {
+    this.highlight.dispose();
     this.models.forEach(pose => pose.model.dispose());
     this.environment.dispose();
     this.renderer.dispose();

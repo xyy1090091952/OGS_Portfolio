@@ -1,22 +1,23 @@
-import { MOTION, PROJECTS, type Category, type Project } from './data';
+import { PROJECTS, type Category, type Project } from './data';
 import { discMarkup } from './disc';
 import type { DiscScene } from './disc-scene';
-
-const clamp = (value: number, min: number, max: number) => Math.min(max, Math.max(min, value));
+import { GALLERY_MOTION as MOTION } from './gallery-config';
+import { GalleryMotion, WheelGesture, type MotionSource } from './gallery-motion';
+import { getGalleryLayout, getDiscScreenPlacement } from './disc-layout';
 
 /** 光盘状态只有一份。滚轮、触摸、键盘、索引均改变 target，再由同一动画循环渲染。 */
 export class DiscGallery {
   private projects = [...PROJECTS];
   private active = -1;
-  private current = 0;
-  private target = 0;
+  private motion = new GalleryMotion();
+  private wheel = new WheelGesture();
   private frame = 0;
   private lastTime = 0;
-  private snapTimer = 0;
   private enabled = true;
   private pointer: {
     id: number; x: number; y: number; progress: number; moved: boolean;
     lastX: number; lastY: number; lastTime: number; rotationId: string | null;
+    touch: boolean; mode: 'pending' | 'rotate' | 'browse-x' | 'browse-y'; velocity: number;
   } | null = null;
   private suppressClick = false;
   private stage: HTMLElement;
@@ -38,6 +39,7 @@ export class DiscGallery {
     root.querySelector('[data-reset]')!.addEventListener('click', () => this.scene?.reset(this.selected.id));
 
     this.stage.addEventListener('click', event => {
+      if (!this.enabled) return;
       if (this.suppressClick) { this.suppressClick = false; return; }
       const disc = (event.target as Element).closest<HTMLElement>('[data-project]');
       const id = disc?.dataset.project ?? this.scene?.hitTest(event.clientX, event.clientY);
@@ -59,74 +61,98 @@ export class DiscGallery {
       }
       if (['ArrowRight', 'ArrowDown', 'ArrowLeft', 'ArrowUp', 'Home', 'End'].includes(event.key)) {
         event.preventDefault();
-        if (event.key === 'Home') this.goTo(0);
-        else if (event.key === 'End') this.goTo(this.projects.length - 1);
-        else this.step(['ArrowRight', 'ArrowDown'].includes(event.key) ? 1 : -1);
-        this.discs[this.active]?.focus({ preventScroll: true });
+        if (event.key === 'Home') this.goTo(0, false, 'key');
+        else if (event.key === 'End') this.goTo(this.projects.length - 1, false, 'key');
+        else this.step(['ArrowRight', 'ArrowDown'].includes(event.key) ? 1 : -1, 'key');
+        // 跳转目标可能仍在屏幕外；焦点留在舞台，避免隐藏按钮让后续方向键失效。
+        this.stage.focus({ preventScroll: true });
       }
     });
 
     // 首页是全屏浏览器：两个方向的滚轮都映射到光盘进度；详情页恢复正常滚动。
     root.addEventListener('wheel', event => {
-      if (!this.enabled || event.ctrlKey) return;
+      if (!this.enabled || event.ctrlKey || this.pointer) return;
       event.preventDefault();
       if (this.projects.length < 2) return;
       const unit = event.deltaMode === 1 ? 16 : event.deltaMode === 2 ? innerHeight : 1;
       const delta = Math.abs(event.deltaX) > Math.abs(event.deltaY) ? event.deltaX : event.deltaY;
-      this.target = clamp(this.target + delta * unit / MOTION.wheelPixelsPerDisc, 0, this.projects.length - 1);
-      this.requestFrame();
-      clearTimeout(this.snapTimer);
-      this.snapTimer = window.setTimeout(() => this.goTo(Math.round(this.target)), MOTION.wheelSnapDelay);
+      const direction = this.wheel.consume(delta * unit, performance.now());
+      if (direction) this.step(direction, 'wheel');
     }, { passive: false });
 
     this.stage.addEventListener('pointerdown', event => {
       if (!this.enabled || event.button !== 0 || this.pointer) return;
-      clearTimeout(this.snapTimer);
+      this.wheel.reset();
       const rotationId = this.scene?.hitTest(event.clientX, event.clientY) ?? null;
       this.pointer = {
-        id: event.pointerId, x: event.clientX, y: event.clientY, progress: this.current, moved: false,
+        id: event.pointerId, x: event.clientX, y: event.clientY, progress: this.motion.current, moved: false,
         lastX: event.clientX, lastY: event.clientY, lastTime: performance.now(), rotationId,
+        touch: event.pointerType !== 'mouse', mode: 'pending', velocity: 0,
       };
-      if (rotationId) this.scene?.beginRotation(rotationId);
-      this.target = this.current;
       this.suppressClick = false;
     });
     this.stage.addEventListener('pointermove', event => {
+      if (!this.enabled) return;
       const pointer = this.pointer;
+      // 触屏只响应真实拖拽，不模拟无法移开的 hover。
+      if (!pointer && event.pointerType === 'mouse') this.scene?.hoverAt(event.clientX, event.clientY);
       if (!pointer || pointer.id !== event.pointerId) return;
       const dx = event.clientX - pointer.x;
       const dy = event.clientY - pointer.y;
       if (Math.hypot(dx, dy) < MOTION.dragThreshold && !pointer.moved) return;
       if (!pointer.moved) {
         pointer.moved = true;
+        const horizontal = Math.abs(dx) >= Math.abs(dy);
+        // 触摸先判方向：横滑浏览，盘面纵拖旋转；鼠标在盘面仍可自由旋转。
+        pointer.mode = pointer.rotationId && (!pointer.touch || !horizontal)
+          ? 'rotate' : horizontal ? 'browse-x' : 'browse-y';
+        pointer.progress = this.motion.current;
+        this.motion.hold();
+        if (pointer.mode === 'rotate') this.scene?.beginRotation(pointer.rotationId!);
+        else this.scene?.clearHover();
         this.stage.setPointerCapture(event.pointerId);
         this.stage.classList.add('is-dragging');
       }
-      if (pointer.rotationId) {
-        const now = performance.now();
-        this.scene?.rotate(pointer.rotationId, event.clientX - pointer.lastX, event.clientY - pointer.lastY, event.clientX, event.clientY, now - pointer.lastTime);
-        pointer.lastX = event.clientX;
-        pointer.lastY = event.clientY;
-        pointer.lastTime = now;
-        return;
+      const now = performance.now();
+      const elapsed = Math.max(8, now - pointer.lastTime);
+      if (pointer.mode === 'rotate') {
+        this.scene?.rotate(pointer.rotationId!, event.clientX - pointer.lastX, event.clientY - pointer.lastY, event.clientX, event.clientY, elapsed);
+      } else {
+        const { spacing } = this.geometry();
+        const distance = pointer.mode === 'browse-x' ? -dx : dy;
+        const previous = this.motion.target;
+        this.motion.dragTo(pointer.progress + distance / spacing, this.projects.length, this.reducedMotion.matches);
+        const velocity = (this.motion.target - previous) * 1000 / elapsed;
+        pointer.velocity = pointer.velocity * .35 + velocity * .65;
       }
-      const { spacing, slope } = this.geometry();
-      // 拖拽沿光盘的斜线投影，横向、竖向操作均能自然推动队列。
-      const distance = Math.abs(dx) > Math.abs(dy) * .5 ? dx - dy * .3 : dy;
-      const direction = Math.abs(dx) > Math.abs(dy) * .5 ? -1 : 1;
-      this.target = clamp(pointer.progress + direction * distance / (spacing * (1 + Math.abs(slope) * .1)), 0, this.projects.length - 1);
+      pointer.lastX = event.clientX;
+      pointer.lastY = event.clientY;
+      pointer.lastTime = now;
+      this.updateControls();
       this.requestFrame();
     });
     this.stage.addEventListener('pointerup', event => this.endDrag(event));
     this.stage.addEventListener('pointercancel', event => this.endDrag(event, true));
+    this.stage.addEventListener('pointerleave', () => this.scene?.clearHover());
+    window.addEventListener('blur', () => {
+      this.cancelPointer();
+      this.scene?.pause();
+      this.wheel.reset();
+    });
     this.stage.addEventListener('lostpointercapture', event => {
       // 触摸起点的子元素会先失去隐式捕获；转交给舞台时不能误判为拖动结束。
       if (event.target === this.stage) this.endDrag(event, true);
     });
     window.addEventListener('pointerup', event => this.endDrag(event));
-    window.addEventListener('resize', () => this.requestFrame());
+    window.addEventListener('resize', () => {
+      this.cancelPointer();
+      this.position();
+      this.requestFrame();
+    });
     document.addEventListener('visibilitychange', () => {
       if (document.hidden) {
+        this.cancelPointer();
+        this.scene?.pause();
         cancelAnimationFrame(this.frame);
         this.frame = 0;
       } else if (this.enabled) this.requestFrame();
@@ -164,28 +190,35 @@ export class DiscGallery {
   setEnabled(enabled: boolean) {
     this.enabled = enabled;
     if (!enabled) {
-      clearTimeout(this.snapTimer);
-      this.pointer = null;
+      this.cancelPointer();
+      this.wheel.reset();
       this.scene?.pause();
       this.stage.classList.remove('is-dragging');
       cancelAnimationFrame(this.frame);
       this.frame = 0;
-      this.current = this.target = Math.max(0, this.active);
+      this.motion.jump(Math.max(0, this.active));
+      this.updateControls();
       this.position();
       this.scene?.step(0, this.selected.id);
-    } else this.requestFrame();
+    } else {
+      this.position();
+      this.requestFrame();
+    }
   }
 
   setFilter(category: Category) {
-    clearTimeout(this.snapTimer);
+    this.cancelPointer();
+    this.wheel.reset();
     cancelAnimationFrame(this.frame);
     this.frame = 0;
     const selectedId = this.selected?.id;
     this.scene?.pause();
     this.projects = category === 'all' ? [...PROJECTS] : PROJECTS.filter(project => project.category === category);
-    this.current = this.target = Math.max(0, this.projects.findIndex(project => project.id === selectedId));
+    this.motion.jump(Math.max(0, this.projects.findIndex(project => project.id === selectedId)));
     this.active = -1;
     this.render();
+    this.scene?.step(0, this.selected.id);
+    this.requestFrame();
   }
 
   selectProject(id: string, instant = false) {
@@ -197,27 +230,44 @@ export class DiscGallery {
   private endDrag(event: PointerEvent, cancel = false) {
     const pointer = this.pointer;
     if (!pointer || pointer.id !== event.pointerId) return;
+    this.finishPointer(cancel);
+  }
+
+  private cancelPointer() {
+    if (this.pointer) this.finishPointer(true);
+  }
+
+  private finishPointer(cancel: boolean) {
+    const pointer = this.pointer!;
     this.pointer = null;
     this.suppressClick = pointer.moved;
     this.stage.classList.remove('is-dragging');
-    if (this.stage.hasPointerCapture(event.pointerId)) this.stage.releasePointerCapture(event.pointerId);
-    if (pointer.rotationId) {
-      this.scene?.endRotation(cancel || performance.now() - pointer.lastTime > 100);
-      return;
+    if (this.stage.hasPointerCapture(pointer.id)) this.stage.releasePointerCapture(pointer.id);
+    const stale = performance.now() - pointer.lastTime > MOTION.stalePointer;
+    if (pointer.mode === 'rotate') {
+      this.scene?.endRotation(cancel || stale);
+      this.goTo(Math.round(this.motion.current), false, 'snap');
+    } else if (pointer.moved) {
+      this.motion.release(stale ? 0 : pointer.velocity, this.projects.length, this.reducedMotion.matches, cancel);
+      this.updateControls();
+      this.requestFrame();
     }
-    if (pointer.moved || cancel) this.goTo(Math.round(this.target));
   }
 
-  private step(direction: number) { this.goTo(Math.round(this.target) + direction); }
+  private step(direction: number, source: MotionSource = 'click') {
+    if (!this.enabled) return;
+    this.motion.stepBy(direction, this.projects.length, source, this.reducedMotion.matches);
+    this.updateControls();
+    this.requestFrame();
+  }
 
-  private goTo(index: number, instant = false) {
-    clearTimeout(this.snapTimer);
-    this.target = clamp(index, 0, this.projects.length - 1);
+  private goTo(index: number, instant = false, source: MotionSource = 'click') {
+    this.motion.goTo(index, this.projects.length, source, instant || this.reducedMotion.matches);
     if (instant || this.reducedMotion.matches) {
-      this.current = this.target;
+      this.updateMetadata(Math.round(this.motion.current));
       this.position();
     }
-    this.updateMetadata(Math.round(this.target));
+    this.updateControls();
     this.requestFrame();
   }
 
@@ -231,44 +281,54 @@ export class DiscGallery {
     this.frame = 0;
     const dt = Math.min(50, Math.max(1, time - this.lastTime));
     this.lastTime = time;
-    const factor = this.reducedMotion.matches ? 1 : 1 - Math.pow(1 - MOTION.followSpeed, dt / 16.67);
-    this.current += (this.target - this.current) * factor;
-    if (Math.abs(this.target - this.current) < MOTION.settleEpsilon) this.current = this.target;
-    if (!Number.isInteger(this.target)) this.updateMetadata(Math.round(this.current));
-    this.position();
+    const moving = this.motion.tick(time, dt, this.reducedMotion.matches);
+    // 资料随眼前的光盘跨过中点再切换，避免标题先到、光盘还没到。
+    this.updateMetadata(Math.round(this.motion.current));
+    this.position(dt);
     const rotating = this.scene?.step(dt, this.selected.id) ?? false;
-    if (this.current !== this.target || rotating) this.frame = requestAnimationFrame(next => this.animate(next));
+    if (moving || rotating) this.frame = requestAnimationFrame(next => this.animate(next));
   }
 
   private geometry() {
-    const mobile = innerWidth < 700;
-    const config = mobile ? MOTION.mobile : MOTION.desktop;
-    return {
-      size: mobile ? Math.min(innerWidth * config.sizeRatio, innerHeight * .53) : Math.min(innerWidth * .47, innerHeight * config.sizeRatio),
-      spacing: innerWidth * config.spacingRatio,
-      slope: config.slope,
-      mobile,
-    };
+    return getGalleryLayout(this.root.clientWidth || innerWidth, this.root.clientHeight || innerHeight);
   }
 
-  private position() {
-    const { size, spacing, slope, mobile } = this.geometry();
+  private position(dt = 0) {
+    const layout = this.geometry();
+    const { size, centerX, centerY, mode } = layout;
+    const { current, target, velocity } = this.motion;
+    this.root.dataset.layout = mode;
+    this.root.dataset.progress = current.toFixed(4);
+    this.root.dataset.target = target.toFixed(4);
+    const ctaX = centerX + (mode === 'desktop' ? size * .52 : 0);
+    this.root.style.setProperty('--gallery-cta-x', `calc(50% + ${ctaX}px)`);
+    const ctaOffset = mode === 'desktop' ? size * .4 + 8 : size * .43 + (mode === 'landscape' ? 8 : 18);
+    this.root.style.setProperty('--gallery-cta-y', `calc(50% + ${centerY + ctaOffset}px)`);
     this.stage.style.setProperty('--disc-size', `${size}px`);
-    this.scene?.updateLayout({ size, spacing, slope, mobile }, this.current);
+    this.scene?.updateLayout(layout, current, velocity, dt);
     this.discs.forEach((disc, index) => {
-      const offset = index - this.current;
-      const scale = clamp(1 + offset * .07, .65, 1.25);
-      disc.style.setProperty('--x', `${offset * spacing}px`);
-      disc.style.setProperty('--y', `${offset * spacing * slope}px`);
+      const offset = index - current;
+      const { x, y, scale } = getDiscScreenPlacement(layout, offset);
+      disc.style.setProperty('--x', `${x}px`);
+      disc.style.setProperty('--y', `${y}px`);
       disc.style.setProperty('--scale', String(scale));
       disc.style.setProperty('--yaw', `${-31 + offset * 2}deg`);
-      disc.style.setProperty('--roll', `${-24 + offset * 2 + (this.target - this.current) * -9}deg`);
+      disc.style.setProperty('--roll', `${-24 + offset * 2 - velocity * 1.2}deg`);
       disc.style.setProperty('--shine', `${offset * 15}deg`);
-      disc.style.zIndex = String(20 + index);
-      const offscreen = Math.abs(offset) > (mobile ? 1.6 : 2.4);
+      // CSS 回退与三维场景一致：左下方较早的光盘遮住右上方后续光盘。
+      disc.style.zIndex = String(20 + this.projects.length - index);
+      const offscreen = Math.abs(offset) >= layout.visibleRange;
       disc.style.visibility = offscreen ? 'hidden' : 'visible';
       disc.setAttribute('aria-hidden', String(offscreen));
     });
+  }
+
+  private updateControls() {
+    // 按钮边界看目的地；作品资料看实际位置，快速连点时二者各司其职。
+    const index = Math.round(this.motion.target);
+    this.root.dataset.target = this.motion.target.toFixed(4);
+    this.root.querySelector<HTMLButtonElement>('[data-prev]')!.disabled = index === 0;
+    this.root.querySelector<HTMLButtonElement>('[data-next]')!.disabled = index === this.projects.length - 1;
   }
 
   private updateMetadata(index: number) {
@@ -282,8 +342,6 @@ export class DiscGallery {
     this.root.querySelector('[data-project-quote]')!.textContent = project.subtitle;
     this.root.querySelector('[data-project-label]')!.textContent = project.label;
     this.root.querySelector('[data-counter]')!.textContent = `${String(index + 1).padStart(2, '0')} / ${String(this.projects.length).padStart(2, '0')}`;
-    this.root.querySelector<HTMLButtonElement>('[data-prev]')!.disabled = index === 0;
-    this.root.querySelector<HTMLButtonElement>('[data-next]')!.disabled = index === this.projects.length - 1;
     this.discs.forEach((disc, i) => {
       disc.classList.toggle('is-active', i === index);
       disc.setAttribute('aria-current', String(i === index));
@@ -292,7 +350,7 @@ export class DiscGallery {
     if (!this.reducedMotion.matches) {
       this.root.querySelectorAll('.metadata-value, .gallery-note p').forEach(element => {
         element.getAnimations().forEach(animation => animation.cancel());
-        element.animate([{ transform: 'translateY(12px)', opacity: 0 }, { transform: 'translateY(0)', opacity: 1 }], { duration: 550, easing: 'cubic-bezier(.2,.7,.2,1)' });
+        element.animate([{ transform: 'translateY(12px)', opacity: 0 }, { transform: 'translateY(0)', opacity: 1 }], { duration: MOTION.duration.wheel, easing: MOTION.cssCurve });
       });
     }
     this.onChange(project);
@@ -303,6 +361,7 @@ export class DiscGallery {
     this.discs = [...this.stage.querySelectorAll<HTMLElement>('.disc')];
     this.scene?.setProjects(this.projects);
     this.position();
-    this.updateMetadata(Math.round(this.current));
+    this.updateMetadata(Math.round(this.motion.current));
+    this.updateControls();
   }
 }

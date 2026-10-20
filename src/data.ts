@@ -75,14 +75,3 @@ export const PROJECTS: Project[] = [
     tags: ['平面设计', '创意实验', '几何构成'],
   },
 ];
-
-export const MOTION = {
-  // 连续滚动进度以「一张光盘」为单位，屏幕尺寸变化不改变当前作品。
-  wheelPixelsPerDisc: 650,
-  wheelSnapDelay: 180,
-  dragThreshold: 7,
-  followSpeed: 0.095,
-  settleEpsilon: 0.0005,
-  desktop: { sizeRatio: 0.69, spacingRatio: 0.365, slope: -0.46 },
-  mobile: { sizeRatio: 0.92, spacingRatio: 0.85, slope: -0.28 },
-};

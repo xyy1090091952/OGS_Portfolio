@@ -1,21 +1,12 @@
 import {
-  ExtrudeGeometry, Group, Mesh, MeshPhysicalMaterial, MeshStandardMaterial,
-  Path, RingGeometry, Shape, type Material, type Texture,
+  Group, Mesh, MeshPhysicalMaterial, MeshStandardMaterial,
+  RingGeometry, Vector2, type Material, type Texture,
 } from 'three';
-import { createCoverTexture, createDiscSurfaceMaps } from './disc-textures';
+import { createCoverTexture, createPrintSurfaceMaps } from './disc-textures';
+import { DISC_3D, DISC_FINISH } from './disc-config';
+import { createSilverFinish } from './disc-materials';
+import { createDiscShell } from './disc-geometry';
 import type { Project } from './data';
-
-export const DISC_3D = {
-  holeRadius: .125,
-  hubRadius: .22,
-  thickness: .018,
-  segments: 144,
-  pixelRatioLimit: 1.75,
-  dragRadiansPerDiameter: Math.PI * 2,
-  inertiaDecay: .92,
-  maxAngularSpeed: .065,
-  flipDuration: 720,
-};
 
 function ring(inner: number, outer: number) {
   const geometry = new RingGeometry(inner, outer, DISC_3D.segments);
@@ -36,36 +27,25 @@ export function createDiscModel(project: Project, index: number, onUpdate: () =>
   const group = new Group();
   group.name = `disc-${project.id}`;
   group.userData.projectId = project.id;
-  const shape = new Shape();
-  shape.absarc(0, 0, 1, 0, Math.PI * 2, false);
-  const hole = new Path();
-  hole.absarc(0, 0, DISC_3D.holeRadius, 0, Math.PI * 2, true);
-  shape.holes.push(hole);
-  const shellGeometry = new ExtrudeGeometry(shape, {
-    depth: DISC_3D.thickness, bevelEnabled: true, bevelSize: .0015,
-    bevelThickness: .0015, bevelSegments: 2, steps: 1, curveSegments: DISC_3D.segments / 2,
-  });
-  shellGeometry.translate(0, 0, -DISC_3D.thickness / 2);
+  const shellGeometry = createDiscShell();
   const edge = new MeshStandardMaterial({ color: '#bec5c8', metalness: .95, roughness: .21 });
   const shell = new Mesh(shellGeometry, edge);
   shell.name = 'physical-edge';
   group.add(shell);
 
   const cover = createCoverTexture(project, index, onUpdate);
-  const front = new Mesh(ring(DISC_3D.hubRadius, .993), new MeshStandardMaterial({
-    map: cover, roughness: .55, metalness: .08, envMapIntensity: .35,
+  const printMaps = createPrintSurfaceMaps();
+  const front = new Mesh(ring(DISC_3D.hubRadius, .993), new MeshPhysicalMaterial({
+    map: cover, roughness: DISC_FINISH.printRoughness, metalness: DISC_FINISH.printMetalness,
+    normalMap: printMaps.normal, normalScale: new Vector2(.3, .3), roughnessMap: printMaps.roughness,
+    clearcoat: DISC_FINISH.printClearcoat, clearcoatRoughness: .2,
+    envMapIntensity: .45,
   }));
   front.name = 'printed-front';
   front.position.z = .011;
   group.add(front);
 
-  const maps = createDiscSurfaceMaps();
-  const silver = new MeshPhysicalMaterial({
-    map: maps.color, metalness: 1, roughness: .29, roughnessMap: maps.roughness,
-    iridescence: 1, iridescenceIOR: 1.42, iridescenceThicknessRange: [160, 480],
-    iridescenceThicknessMap: maps.thickness, clearcoat: .85, clearcoatRoughness: .15,
-    envMapIntensity: 1.2,
-  });
+  const { material: silver, textures: silverTextures } = createSilverFinish();
   const back = new Mesh(ring(DISC_3D.hubRadius, .993), silver);
   back.name = 'reflective-back';
   back.rotation.y = Math.PI;
@@ -73,7 +53,8 @@ export function createDiscModel(project: Project, index: number, onUpdate: () =>
   group.add(back);
 
   const hubMaterial = new MeshPhysicalMaterial({
-    color: '#cbd0d6', metalness: .64, roughness: .23, clearcoat: 1, envMapIntensity: .85,
+    color: '#e5e9ed', metalness: .05, roughness: .3, clearcoat: .6, envMapIntensity: .9,
+    transmission: .65, thickness: .012, ior: 1.5,
   });
   const materials: Material[] = [edge, front.material, silver, hubMaterial];
   for (const sign of [-1, 1]) {
@@ -89,7 +70,7 @@ export function createDiscModel(project: Project, index: number, onUpdate: () =>
       group.add(groove);
     }
   }
-  const textures: Texture[] = [cover, maps.color, maps.roughness, maps.thickness];
+  const textures: Texture[] = [cover, printMaps.normal, printMaps.roughness, ...silverTextures];
   return {
     group,
     dispose() {

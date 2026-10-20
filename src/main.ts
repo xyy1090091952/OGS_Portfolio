@@ -34,7 +34,7 @@ document.querySelector('#app')!.innerHTML = `
         </dl>
       </div>
       <div class="archive-label"><span>PERSONAL ARCHIVE</span><span>概念作品集</span></div>
-      <div class="disc-stage" role="group" aria-label="拖动光盘旋转，滚动切换作品；F 翻面，R 归位，方向键切换" tabindex="0"></div>
+      <div class="disc-stage" role="group" aria-label="鼠标拖动光盘旋转，滚动切换；触屏横滑切换、纵拖旋转；F 翻面，R 归位，方向键切换" tabindex="0"></div>
       <div class="gallery-notes">
         <div class="gallery-note"><span class="note-symbol" aria-hidden="true">✳</span><span class="micro">DESIGN PHILOSOPHY</span><p>“WITH CREATIVE<br>FROM HEART.”</p></div>
         <div class="gallery-note"><span class="note-symbol" aria-hidden="true">✳</span><span class="micro" data-project-label></span><p data-project-quote></p></div>
@@ -42,9 +42,9 @@ document.querySelector('#app')!.innerHTML = `
       <button class="open-project" data-explore>查看作品 <span>↗</span></button>
       <div class="disc-tools" role="group" aria-label="光盘操作" hidden><button data-flip aria-label="翻转当前光盘">翻面 <span>↻</span></button><button data-reset aria-label="光盘恢复正面角度">归位 <span>↺</span></button></div>
       <div class="gallery-controls"><button data-prev aria-label="上一个作品">←</button><span data-counter></span><button data-next aria-label="下一个作品">→</button></div>
-      <div class="gallery-instructions"><span>SCROLL TO EXPLORE</span><span class="flat-instructions">滚动 / 拖动浏览</span><span class="spatial-instructions">拖动光盘旋转 · 滚动切换作品</span></div>
+      <div class="gallery-instructions"><span>SCROLL TO EXPLORE</span><span class="flat-instructions">滚动 / 横滑浏览</span><span class="spatial-instructions">拖动光盘旋转 · 滚动切换作品</span><span class="touch-instructions">横滑切换作品 · 纵拖光盘旋转</span></div>
       <button class="help-toggle" aria-label="查看操作提示" aria-expanded="false" aria-controls="gallery-help">+</button>
-      <aside class="gallery-help" id="gallery-help" hidden><strong>把每一个想法，收进一张唱片。</strong><p>拖动光盘可旋转，松手后随惯性停下。<br>滚动鼠标或拖动空白区域切换作品。<br>点击当前光盘打开详情。<br>F 翻面 · R 归位 · 方向键切换。</p><span>Old_glasses / With Creative From Heart.</span></aside>
+      <aside class="gallery-help" id="gallery-help" hidden><strong>把每一个想法，收进一张唱片。</strong><p>鼠标拖动光盘可旋转，松手后随惯性停下。<br>滚动鼠标或拖动空白区域切换作品。<br>触屏横滑切换作品，纵拖光盘旋转。<br>点击当前光盘打开详情。<br>F 翻面 · R 归位 · 方向键切换。</p><span>Old_glasses / With Creative From Heart.</span></aside>
     </section>
     <section class="content-page" hidden></section>
   </main>
@@ -110,7 +110,7 @@ menu.addEventListener('click', event => {
     if (currentRoute !== 'work') location.hash = 'work';
     setMenu(false);
     gallery.selectProject(id);
-    galleryElement.querySelector<HTMLButtonElement>(`[data-project="${id}"]`)?.focus({ preventScroll: true });
+    galleryElement.querySelector<HTMLElement>('.disc-stage')?.focus({ preventScroll: true });
   }
 });
 document.addEventListener('keydown', event => {

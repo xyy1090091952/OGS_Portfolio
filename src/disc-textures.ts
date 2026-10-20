@@ -141,18 +141,67 @@ function drawArtwork(ctx: CanvasRenderingContext2D, artwork: Project['artwork'])
   }
 }
 
+/** 印刷覆膜的微小起伏和粗糙度分开保存，不把高光烘焙到封面颜色里。 */
+export function createPrintSurfaceMaps() {
+  const size = 512;
+  const normal = document.createElement('canvas');
+  const roughness = document.createElement('canvas');
+  normal.width = normal.height = roughness.width = roughness.height = size;
+  const normalContext = normal.getContext('2d')!;
+  const roughContext = roughness.getContext('2d')!;
+  const normals = normalContext.createImageData(size, size);
+  const rough = roughContext.createImageData(size, size);
+  for (let y = 0; y < size; y++) {
+    for (let x = 0; x < size; x++) {
+      // 固定种子的整型噪声，刷新或重新创建场景时纹理保持一致。
+      const seed = Math.imul(x + 17, 374761393) ^ Math.imul(y + 31, 668265263);
+      const noise = ((Math.imul(seed ^ (seed >>> 13), 1274126177) >>> 0) % 1024) / 1023;
+      const i = (y * size + x) * 4;
+      normals.data[i] = 128 + (noise - .5) * 18;
+      normals.data[i + 1] = 128 + (noise - .5) * 12;
+      normals.data[i + 2] = 255;
+      normals.data[i + 3] = 255;
+      const value = 190 + noise * 35;
+      rough.data[i] = rough.data[i + 1] = rough.data[i + 2] = value;
+      rough.data[i + 3] = 255;
+    }
+  }
+  normalContext.putImageData(normals, 0, 0);
+  roughContext.putImageData(rough, 0, 0);
+  return { normal: new CanvasTexture(normal), roughness: new CanvasTexture(roughness) };
+}
+
 /** 背面纹理只有细密沟槽；随视角变化的彩虹和高光由三维材质计算。 */
 export function createDiscSurfaceMaps() {
   const { element, ctx } = canvas();
   const { element: roughness, ctx: rough } = canvas();
-  const { element: thickness, ctx: film } = canvas();
-  ctx.fillStyle = '#c4c9cd'; ctx.fillRect(0, 0, 1000, 1000);
-  rough.fillStyle = '#454545'; rough.fillRect(0, 0, 1000, 1000);
-  const gradient = film.createRadialGradient(500, 500, 100, 500, 500, 500);
-  gradient.addColorStop(0, '#222'); gradient.addColorStop(.2, '#777'); gradient.addColorStop(.7, '#ddd'); gradient.addColorStop(1, '#888');
-  film.fillStyle = gradient; film.fillRect(0, 0, 1000, 1000);
+  const { element: direction, ctx: directionContext } = canvas();
+  const { element: normal, ctx: normalContext } = canvas();
+  ctx.fillStyle = '#e4e6e9'; ctx.fillRect(0, 0, 1000, 1000);
+  rough.fillStyle = '#b3b3b3'; rough.fillRect(0, 0, 1000, 1000);
+  // R/G 保存沟槽切线方向，B 保存强度；这是一张数据贴图，不含可见的彩虹颜色。
+  const directionPixels = directionContext.createImageData(RESOLUTION, RESOLUTION);
+  const normalPixels = normalContext.createImageData(RESOLUTION, RESOLUTION);
+  for (let y = 0; y < RESOLUTION; y++) {
+    for (let x = 0; x < RESOLUTION; x++) {
+      const dx = x - RESOLUTION / 2, dy = RESOLUTION / 2 - y;
+      const radius = Math.max(1, Math.hypot(dx, dy));
+      const i = (y * RESOLUTION + x) * 4;
+      directionPixels.data[i] = Math.round((1 - dy / radius) * 127.5);
+      directionPixels.data[i + 1] = Math.round((1 + dx / radius) * 127.5);
+      directionPixels.data[i + 2] = 255;
+      directionPixels.data[i + 3] = 255;
+      const grooveSlope = Math.sin(radius * .65) * .065 + Math.sin(radius * 2.1) * .022;
+      normalPixels.data[i] = 128 + dx / radius * grooveSlope * 127;
+      normalPixels.data[i + 1] = 128 + dy / radius * grooveSlope * 127;
+      normalPixels.data[i + 2] = 255;
+      normalPixels.data[i + 3] = 255;
+    }
+  }
+  directionContext.putImageData(directionPixels, 0, 0);
+  normalContext.putImageData(normalPixels, 0, 0);
   for (let radius = 122; radius < 491; radius += 1.4) {
-    ctx.strokeStyle = radius % 5 < 2 ? '#f7faff12' : '#20292d10';
+    ctx.strokeStyle = radius % 5 < 2 ? '#f7faff09' : '#20292d06';
     ctx.lineWidth = .55;
     ctx.beginPath(); ctx.arc(500, 500, radius, 0, Math.PI * 2); ctx.stroke();
     rough.strokeStyle = '#ffffff1a'; rough.lineWidth = .5;
@@ -160,5 +209,5 @@ export function createDiscSurfaceMaps() {
   }
   const color = new CanvasTexture(element);
   color.colorSpace = SRGBColorSpace;
-  return { color, roughness: new CanvasTexture(roughness), thickness: new CanvasTexture(thickness) };
+  return { color, roughness: new CanvasTexture(roughness), direction: new CanvasTexture(direction), normal: new CanvasTexture(normal) };
 }
