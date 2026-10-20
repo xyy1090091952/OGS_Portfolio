@@ -1,7 +1,7 @@
 /** 几何、手感和材质统一配置，调节效果时不需要改动交互逻辑。 */
 export const DISC_3D = {
-  holeRadius: .125,
-  hubRadius: .22,
+  holeRadius: .14,
+  hubRadius: .24,
   thickness: .018,
   segments: 256,
   edgeBevel: .0015,
@@ -43,11 +43,38 @@ export const DISC_OUTLINE = {
 
 export const DISC_FINISH = {
   printRoughness: .42,
-  printMetalness: .32,
+  printMetalness: .48,
   printClearcoat: .8,
+  printEnvironment: .7,
+  edgeRoughness: .075,
+  edgeMetalness: .55,
   silverRoughness: .24,
   silverAnisotropy: .86,
   silverIridescence: .22,
   diffractionStrength: .32,
   environmentIntensity: .9,
 };
+
+/** 柔光环境与灯光共用配置，亮面、暗面和冷色轮廓各有分工。 */
+export const DISC_LIGHTING = {
+  exposure: .86,
+  ambient: .25,
+  // 本项目正面朝 +Z；主灯从盘面倾向的一侧照入，保证白色印字仍然清晰。
+  key: { color: '#fff9e8', intensity: .75, position: [-3.5, 8, 6] },
+  fill: { color: '#ffffff', intensity: .3, position: [5, -2, 4] },
+  rim: { color: '#499ff5', intensity: .75, position: [0, 3, -6] },
+  strip: { intensity: 1.9, width: 6, height: .4, position: [0, 3.2, 3] },
+  environmentBands: [
+    { latitude: .14, width: .07, intensity: .85 },
+    { latitude: .26, width: .077, intensity: .72 },
+    { latitude: .4, width: .049, intensity: .51 },
+    { latitude: .62, width: .035, intensity: .3 },
+  ],
+} as const;
+
+export const DISC_HUB = {
+  frostOuter: .174,
+  matrixOuter: .214,
+  halfThickness: .012,
+  relief: .0016,
+} as const;

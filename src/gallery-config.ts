@@ -33,7 +33,8 @@ export const GALLERY_LAYOUT = {
   compactWidth: 991,
   phoneWidth: 767,
   shortHeight: 600,
-  desktop: { widthRatio: .47, heightRatio: .69, spacingRatio: .365, slope: -.46 },
+  // 桌面主盘以高度定尺寸，近正方形窗口也保持原站的大盘构图。
+  desktop: { widthRatio: .7, heightRatio: .69, spacingRatio: .365, spacingHeightRatio: .56, centerY: -.018, slope: -.46 },
   compact: { widthRatio: .76, heightRatio: .43, maxSize: 550, verticalReserve: 340, minSize: 120, sideScale: .48, dipRatio: .23 },
   landscape: { widthRatio: .38, heightRatio: .58, centerX: .61, centerY: .44 },
 } as const;

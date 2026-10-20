@@ -1,32 +1,38 @@
 import {
-  Color, Mesh, MeshBasicMaterial, MeshPhysicalMaterial, PlaneGeometry,
-  PMREMGenerator, Scene, Vector2, type WebGLRenderer,
+  CanvasTexture, EquirectangularReflectionMapping, MeshPhysicalMaterial,
+  PMREMGenerator, Vector2, type WebGLRenderer,
 } from 'three';
-import { DISC_FINISH } from './disc-config';
+import { DISC_FINISH, DISC_LIGHTING } from './disc-config';
 import { createDiscSurfaceMaps } from './disc-textures';
 
-/** 摄影棚长条柔光板：反光要有明暗和形状，才能读出光盘的弧度与薄边。 */
+/** 在暗色环境上铺柔和的水平光带，反射保留灰阶，不把银环照成整块白色。 */
 export function createDiscEnvironment(renderer: WebGLRenderer) {
-  const studio = new Scene();
-  studio.background = new Color('#30343b');
-  const panels: Mesh<PlaneGeometry, MeshBasicMaterial>[] = [];
-  const addPanel = (x: number, y: number, z: number, width: number, height: number, power: number) => {
-    const panel = new Mesh(new PlaneGeometry(width, height), new MeshBasicMaterial({
-      color: new Color('#ffffff').multiplyScalar(power),
-    }));
-    panel.position.set(x, y, z);
-    panel.lookAt(0, 0, 0);
-    panels.push(panel);
-    studio.add(panel);
-  };
-  addPanel(-3, 3, 5, 3, 7, 4);
-  addPanel(4, 1, 3, .8, 6, 3);
-  addPanel(0, -4, 2, 7, 1.3, 2);
-  addPanel(-2, 2, -5, 4, 5, 2);
+  const canvas = document.createElement('canvas');
+  canvas.width = 1024; canvas.height = 512;
+  const ctx = canvas.getContext('2d')!;
+  const background = ctx.createLinearGradient(0, 0, 0, canvas.height);
+  background.addColorStop(0, '#25282f');
+  background.addColorStop(.5, '#0e0f13');
+  background.addColorStop(1, '#020203');
+  ctx.fillStyle = background;
+  ctx.fillRect(0, 0, canvas.width, canvas.height);
+  for (const band of DISC_LIGHTING.environmentBands) {
+    const top = (band.latitude - band.width) * canvas.height;
+    const height = band.width * canvas.height * 2;
+    const glow = ctx.createLinearGradient(0, top, 0, top + height);
+    glow.addColorStop(0, 'rgba(255,255,255,0)');
+    glow.addColorStop(.5, `rgba(255,255,255,${band.intensity})`);
+    glow.addColorStop(1, 'rgba(255,255,255,0)');
+    ctx.fillStyle = glow;
+    ctx.fillRect(0, top, canvas.width, height);
+  }
+  const source = new CanvasTexture(canvas);
+  // 这是线性灯光强度贴图；不按封面照片的 sRGB 再次压暗。
+  source.mapping = EquirectangularReflectionMapping;
   const generator = new PMREMGenerator(renderer);
-  const target = generator.fromScene(studio, .035);
+  const target = generator.fromEquirectangular(source);
   generator.dispose();
-  panels.forEach(panel => { panel.geometry.dispose(); panel.material.dispose(); });
+  source.dispose();
   return target;
 }
 

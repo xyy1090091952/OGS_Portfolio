@@ -1,19 +1,22 @@
 import {
   ACESFilmicToneMapping, AmbientLight, DirectionalLight, Euler, Group, MathUtils, PerspectiveCamera,
-  Quaternion, Raycaster, Scene, Vector2, Vector3, WebGLRenderer,
+  Quaternion, Raycaster, RectAreaLight, Scene, Vector2, Vector3, WebGLRenderer,
   type WebGLRenderTarget,
 } from 'three';
 import { createDiscModel, type DiscModel } from './disc-model';
-import { DISC_3D } from './disc-config';
+import { RectAreaLightUniformsLib } from 'three/addons/lights/RectAreaLightUniformsLib.js';
+import { DISC_3D, DISC_LIGHTING } from './disc-config';
 import { createDiscEnvironment } from './disc-materials';
 import { DiscHighlight } from './disc-highlight';
 import { getDiscPlacement, getGalleryLayout, type GalleryLayout } from './disc-layout';
 import { GALLERY_LAYOUT, GALLERY_MOTION } from './gallery-config';
 import { PROJECTS, type Project } from './data';
+import { DISC_TRANSITION, runDiscTimeline, sampleDiscTransition, type DiscTransitionDirection } from './disc-transition';
 
 interface Pose {
   model: DiscModel;
   mount: Group;
+  flight: Group;
   flow: Group;
   lean: number;
   followProgress: number;
@@ -53,6 +56,8 @@ export class DiscScene {
   private hoverDirty = false;
   private hovered: string | null = null;
   private highlight: DiscHighlight;
+  private strip: RectAreaLight;
+  private flightLayer: HTMLElement | null = null;
   private lost = false;
   private reduced = matchMedia('(prefers-reduced-motion: reduce)');
 
@@ -65,7 +70,8 @@ export class DiscScene {
     this.renderer.setPixelRatio(Math.min(devicePixelRatio, DISC_3D.pixelRatioLimit));
     this.renderer.setClearColor(0, 0);
     this.renderer.toneMapping = ACESFilmicToneMapping;
-    this.renderer.toneMappingExposure = 1.05;
+    this.renderer.toneMappingExposure = DISC_LIGHTING.exposure;
+    this.renderer.transmissionResolutionScale = .5;
     this.element = this.renderer.domElement;
     this.element.className = 'disc-webgl-canvas';
     // 显隐交由页面样式控制，避免 Three.js 默认的内联 display 覆盖回退状态。
@@ -75,13 +81,15 @@ export class DiscScene {
     this.scene.environment = this.environment.texture;
     this.highlight = new DiscHighlight(this.wake);
     this.scene.add(this.highlight.group);
-    this.scene.add(new AmbientLight('#ffffff', .45));
-    const key = new DirectionalLight('#ffffff', 1.4);
-    key.position.set(-500, 700, 1500);
-    this.scene.add(key);
-    const fill = new DirectionalLight('#e2eeff', .6);
-    fill.position.set(900, -400, 400);
-    this.scene.add(fill);
+    this.scene.add(new AmbientLight('#ffffff', DISC_LIGHTING.ambient));
+    for (const config of [DISC_LIGHTING.key, DISC_LIGHTING.fill, DISC_LIGHTING.rim]) {
+      const light = new DirectionalLight(config.color, config.intensity);
+      light.position.set(config.position[0], config.position[1], config.position[2]);
+      this.scene.add(light);
+    }
+    RectAreaLightUniformsLib.init();
+    this.strip = new RectAreaLight('#ffffff', DISC_LIGHTING.strip.intensity, DISC_LIGHTING.strip.width, DISC_LIGHTING.strip.height);
+    this.scene.add(this.strip);
     this.element.addEventListener('webglcontextlost', event => {
       event.preventDefault();
       this.lost = true;
@@ -107,16 +115,18 @@ export class DiscScene {
       if (!this.models.has(project.id)) {
         const model = createDiscModel(project, PROJECTS.indexOf(project), this.wake);
         const mount = new Group();
-        // 陈列位置 > 运动倾斜 > 悬停反馈 > 手动旋转，临时效果不会累积到手动姿态。
+        // 陈列 > 页面转场 > 运动倾斜 > 悬停 > 手动姿态，各层可独立复位。
+        const flight = new Group();
         const flow = new Group();
         const response = new Group();
         response.add(model.group);
         flow.add(response);
-        mount.add(flow);
+        flight.add(flow);
+        mount.add(flight);
         this.scene.add(mount);
         model.group.quaternion.copy(BASE_ROTATION);
         this.models.set(project.id, {
-          model, mount, flow, lean: 0, followProgress: this.progress,
+          model, mount, flight, flow, lean: 0, followProgress: this.progress,
           response, hover: new Vector3(), hoverTarget: new Vector3(), hoverVelocity: new Vector3(),
           perspectiveScale: 1,
           velocity: new Vector3(), from: new Quaternion(), target: null, elapsed: 0,
@@ -134,7 +144,8 @@ export class DiscScene {
     this.progress = progress;
     this.flowVelocity = velocity;
     this.layoutBusy = false;
-    const width = this.host.clientWidth, height = this.host.clientHeight;
+    const viewport = this.flightLayer ?? this.host;
+    const width = viewport.clientWidth, height = viewport.clientHeight;
     if (!width || !height || this.lost) return;
     const ratioLimit = width <= GALLERY_LAYOUT.phoneWidth ? DISC_3D.mobilePixelRatioLimit : DISC_3D.pixelRatioLimit;
     const ratio = Math.min(devicePixelRatio, ratioLimit, Math.sqrt(DISC_3D.maxRenderPixels / (width * height)));
@@ -147,6 +158,11 @@ export class DiscScene {
       this.camera.position.z = height / (2 * Math.tan(MathUtils.degToRad(this.camera.fov / 2)));
       this.camera.updateProjectionMatrix();
     }
+    const lightScale = layout.size / 2;
+    this.strip.width = DISC_LIGHTING.strip.width * lightScale;
+    this.strip.height = DISC_LIGHTING.strip.height * lightScale;
+    this.strip.position.set(...DISC_LIGHTING.strip.position).multiplyScalar(lightScale);
+    this.strip.lookAt(0, 0, 0);
     let near = Infinity, far = 0;
     this.projects.forEach((project, index) => {
       const pose = this.models.get(project.id)!;
@@ -373,6 +389,71 @@ export class DiscScene {
     else this.highlight.update(highlighted?.mount.visible ? highlighted.model.group : null, performance.now());
     this.renderer.render(this.scene, this.camera);
     return busy;
+  }
+
+  get available() { return !this.lost && this.width > 0; }
+
+  /** 复用原画布跨页演出；临时变换只写 flight，结束或取消后统一清理。 */
+  async transition(direction: DiscTransitionDirection, selectedId: string, commit: () => void, signal: AbortSignal) {
+    const selectedIndex = this.projects.findIndex(project => project.id === selectedId);
+    if (!this.available || selectedIndex < 0) { commit(); return; }
+    const layer = document.createElement('div');
+    layer.className = 'disc-transition-layer';
+    layer.setAttribute('aria-hidden', 'true');
+    document.body.append(layer);
+    layer.append(this.element);
+    this.flightLayer = layer;
+    this.highlight.hide();
+    this.element.dataset.transition = direction;
+    // 冻结眼前的旋转，不先归位；包括点击前的 hover / 手动翻面。
+    const turns = new Map<string, Quaternion>();
+    this.models.forEach((pose, id) => {
+      pose.velocity.set(0, 0, 0);
+      pose.target = null;
+      const visible = pose.model.group.quaternion.clone().premultiply(pose.response.quaternion).premultiply(pose.flow.quaternion);
+      const side = new Quaternion().setFromEuler(new Euler(0, Math.PI / 2, 0));
+      turns.set(id, side.multiply(visible.invert()));
+    });
+    const c = DISC_TRANSITION;
+    const duration = direction === 'exit' ? c.exitDelay + c.exitDuration
+      : Math.max(c.enterDuration, c.enterNeighborDuration + c.enterStagger * 3);
+    try {
+      await runDiscTimeline({
+        duration, handover: direction === 'exit' ? c.handover : 0, signal, commit,
+        canAnimate: () => this.available,
+        draw: time => {
+          if (this.lost) return;
+          // 详情出现后舞台会隐藏，窗口尺寸仍从临时全屏容器读取。
+          const width = layer.clientWidth, height = layer.clientHeight;
+          if (width !== this.width || height !== this.height) this.updateLayout(getGalleryLayout(width, height), this.progress);
+          this.projects.forEach((project, index) => {
+            const pose = this.models.get(project.id)!;
+            const offset = index - selectedIndex;
+            const state = sampleDiscTransition(direction, time, offset);
+            pose.flight.scale.setScalar(state.scale);
+            pose.flight.quaternion.identity().slerp(turns.get(project.id)!, state.turn);
+            pose.flight.position.set(
+              Math.sign(offset) * state.retreat * .65,
+              Math.sign(offset) * state.retreat * .2,
+              offset ? -state.retreat * .12 : 0,
+            );
+            if (!offset) this.element.dataset.transitionScale = state.scale.toFixed(4);
+          });
+          this.renderer.render(this.scene, this.camera);
+        },
+      });
+    } finally {
+      this.models.forEach(pose => {
+        pose.flight.scale.setScalar(1);
+        pose.flight.quaternion.identity();
+        pose.flight.position.set(0, 0, 0);
+      });
+      this.host.append(this.element);
+      layer.remove();
+      this.flightLayer = null;
+      delete this.element.dataset.transition;
+      delete this.element.dataset.transitionScale;
+    }
   }
 
   pause() {

@@ -3,6 +3,7 @@ import './artwork.css';
 import { FILTERS, PROFILE, PROJECTS, type Category } from './data';
 import { DiscGallery } from './gallery';
 import { aboutPage, ICONS, projectPage } from './pages';
+import { DISC_TRANSITION } from './disc-transition';
 
 document.querySelector('#app')!.innerHTML = `
   <header class="site-header">
@@ -61,7 +62,9 @@ const reducedMotion = matchMedia('(prefers-reduced-motion: reduce)');
 let filter: Category = 'all';
 let selectedId = PROJECTS[0].id;
 let currentRoute = '';
-let transition: ViewTransition | undefined;
+let navigationId = 0;
+let navigation: AbortController | null = null;
+let navigationTask = Promise.resolve();
 
 const gallery = new DiscGallery(galleryElement, project => { location.hash = `project/${project.id}`; }, project => {
   selectedId = project.id;
@@ -80,12 +83,12 @@ function renderIndex() {
   document.querySelector('[data-total]')!.textContent = String(gallery.visibleProjects.length);
 }
 
-function setMenu(open: boolean, restoreFocus = false) {
+function setMenu(open: boolean, restoreFocus = false, syncGallery = true) {
   header.classList.toggle('index-open', open);
   indexToggle.setAttribute('aria-expanded', String(open));
   menu.inert = !open;
   backdrop.hidden = !open;
-  gallery.setEnabled(!open && currentRoute === 'work');
+  if (syncGallery) gallery.setEnabled(!open && currentRoute === 'work');
   if (restoreFocus) indexToggle.focus();
 }
 indexToggle.addEventListener('click', () => setMenu(indexToggle.getAttribute('aria-expanded') !== 'true'));
@@ -109,7 +112,7 @@ menu.addEventListener('click', event => {
     const id = row.dataset.select!;
     if (currentRoute !== 'work') location.hash = 'work';
     setMenu(false);
-    gallery.selectProject(id);
+    gallery.selectProject(id, currentRoute !== 'work');
     galleryElement.querySelector<HTMLElement>('.disc-stage')?.focus({ preventScroll: true });
   }
 });
@@ -117,7 +120,7 @@ document.addEventListener('keydown', event => {
   if (event.key !== 'Escape') return;
   if (header.classList.contains('index-open')) setMenu(false, true);
   else if (!document.querySelector<HTMLElement>('.gallery-help')!.hidden) setHelp(false);
-  else if (currentRoute !== 'work') location.hash = 'work';
+  else if (location.hash && location.hash !== '#work') location.hash = 'work';
 });
 
 function setHelp(open: boolean) {
@@ -126,51 +129,83 @@ function setHelp(open: boolean) {
 }
 document.querySelector('.help-toggle')!.addEventListener('click', () => setHelp(document.querySelector<HTMLElement>('.gallery-help')!.hidden));
 
-/** Hash 路由支持刷新、直接打开作品、浏览器前进/后退；画廊实例不会随页面销毁。 */
+/** 最新一次导航拥有换页权；先取消并清理旧动画，避免快速前进/后退留下旧画布。 */
 function navigate(initial = false) {
-  const hash = location.hash.slice(1);
-  const [section, id, anchor] = hash.split('/');
-  const project = section === 'project' ? PROJECTS.find(item => item.id === id) : undefined;
-  const route = project ? `project/${project.id}` : section === 'about' ? 'about' : 'work';
-  setMenu(false);
-  setHelp(false);
-  if (!initial && route === currentRoute) {
-    if (anchor === 'design') document.querySelector('#design-content')?.scrollIntoView({ behavior: reducedMotion.matches ? 'instant' : 'smooth' });
-    return;
-  }
-  const returning = route === 'work';
-  if (project && gallery.visibleProjects.some(item => item.id === project.id)) gallery.selectProject(project.id, true);
-  const update = () => {
-    currentRoute = route;
-    galleryElement.hidden = !returning;
-    content.hidden = returning;
-    document.body.classList.toggle('reading-page', !returning);
-    gallery.setEnabled(returning);
-    if (!returning) content.innerHTML = project ? projectPage(project) : aboutPage();
-    else content.innerHTML = '';
-    document.title = `${project?.title ?? (route === 'about' ? '关于' : '作品')} — Old_glasses`;
-    document.querySelectorAll<HTMLElement>('[data-nav]').forEach(link => {
-      const active = link.dataset.nav === (route === 'about' ? 'about' : 'work');
-      link.classList.toggle('is-active', active);
-      if (active) link.setAttribute('aria-current', 'page');
-      else link.removeAttribute('aria-current');
-    });
-    window.scrollTo({ top: 0, behavior: 'instant' });
-    if (!initial) {
-      const focusTarget = returning ? galleryElement.querySelector<HTMLElement>('.disc.is-active') : content.querySelector<HTMLElement>('h1');
-      focusTarget?.focus({ preventScroll: true });
+  const generation = ++navigationId;
+  navigation?.abort();
+  const controller = new AbortController();
+  navigation = controller;
+  const previous = navigationTask;
+  const requestedHash = location.hash.slice(1);
+  navigationTask = (async () => {
+    // 等旧动画的 finally 归还画布，再启动下一次转场。
+    await previous;
+    if (controller.signal.aborted) return;
+    const [section, id, anchor] = requestedHash.split('/');
+    const project = section === 'project' ? PROJECTS.find(item => item.id === id) : undefined;
+    const route = project ? `project/${project.id}` : section === 'about' ? 'about' : 'work';
+    setMenu(false, false, false);
+    setHelp(false);
+    if (!initial && route === currentRoute) {
+      gallery.setEnabled(route === 'work');
+      indexToggle.disabled = false;
+      delete document.body.dataset.routeTransition;
+      if (anchor === 'design') document.querySelector('#design-content')?.scrollIntoView({ behavior: reducedMotion.matches ? 'instant' : 'smooth' });
+      return;
     }
-    if (anchor === 'design') document.querySelector('#design-content')?.scrollIntoView({ behavior: 'instant' });
-  };
-  // 支持 View Transition 的浏览器让同一张光盘衔接到详情；其他浏览器用 CSS 入场。
-  transition?.skipTransition();
-  if (!initial && document.startViewTransition && !reducedMotion.matches) {
-    const nextTransition = document.startViewTransition(update);
-    transition = nextTransition;
-    // 浏览器切到后台或快速连续导航时，快照可能超时；放弃动画后仍完成实际页面更新。
-    nextTransition.ready.catch(() => nextTransition.skipTransition());
-    nextTransition.finished.catch(() => {});
-  } else update();
+    const returning = route === 'work';
+    const wasWork = currentRoute === 'work';
+    // 点击当前盘保留眼前姿态和位置；直接链接或详情间导航才同步选择。
+    if (project && (!wasWork || project.id !== gallery.selected.id)) gallery.selectProject(project.id, true);
+    indexToggle.disabled = true;
+    let committed = false;
+    const update = () => {
+      if (committed || controller.signal.aborted) return;
+      committed = true;
+      currentRoute = route;
+      galleryElement.hidden = !returning;
+      content.hidden = returning;
+      document.body.classList.toggle('reading-page', !returning);
+      document.body.dataset.route = route;
+      content.getAnimations().forEach(animation => animation.cancel());
+      content.innerHTML = returning ? '' : project ? projectPage(project) : aboutPage();
+      if (!returning && !initial && !reducedMotion.matches) {
+        content.animate([{ opacity: 0 }, { opacity: 1 }], { duration: DISC_TRANSITION.pageFade, easing: 'ease-out' });
+      }
+      document.title = `${project?.title ?? (route === 'about' ? '关于' : '作品')} — Old_glasses`;
+      document.querySelectorAll<HTMLElement>('[data-nav]').forEach(link => {
+        const active = link.dataset.nav === (route === 'about' ? 'about' : 'work');
+        link.classList.toggle('is-active', active);
+        if (active) link.setAttribute('aria-current', 'page');
+        else link.removeAttribute('aria-current');
+      });
+      window.scrollTo({ top: 0, behavior: 'instant' });
+      if (!returning && !initial) content.querySelector<HTMLElement>('h1')?.focus({ preventScroll: true });
+      if (anchor === 'design') document.querySelector('#design-content')?.scrollIntoView({ behavior: 'instant' });
+    };
+    try {
+      if (!initial && wasWork && project) {
+        document.body.dataset.routeTransition = 'exit';
+        await gallery.transition('exit', update, controller.signal);
+      } else if (!initial && returning && !wasWork) {
+        document.body.dataset.routeTransition = 'enter';
+        update();
+        gallery.prepareReturn();
+        await gallery.transition('enter', () => {}, controller.signal);
+      } else update();
+    } catch (error) {
+      // 动画失败不能阻断导航；无 WebGL 设备也能打开完整详情。
+      console.warn('光盘转场已回退为直接切页', error);
+      update();
+    } finally {
+      if (generation === navigationId) {
+        gallery.setEnabled(currentRoute === 'work');
+        indexToggle.disabled = false;
+        delete document.body.dataset.routeTransition;
+        if (returning && !initial) galleryElement.querySelector<HTMLElement>('.disc-stage')?.focus({ preventScroll: true });
+      }
+    }
+  })();
 }
 
 let toastTimer = 0;

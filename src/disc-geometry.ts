@@ -1,5 +1,38 @@
 import { LatheGeometry, Vector2 } from 'three';
-import { DISC_3D } from './disc-config';
+import { DISC_3D, DISC_HUB } from './disc-config';
+
+/** 中心环有真实的厚度与微弧截面，转动时不同半径接到的反光自然错开。 */
+export function createHubBand(inner: number, outer: number, relief = DISC_HUB.relief) {
+  const profile: Vector2[] = [];
+  const steps = 16;
+  const half = DISC_HUB.halfThickness;
+  for (const side of [-1, 1]) {
+    for (let i = 0; i <= steps; i++) {
+      const t = side < 0 ? i / steps : 1 - i / steps;
+      const z = half + Math.sin(t * Math.PI) * relief;
+      profile.push(new Vector2(inner + (outer - inner) * t, side * z));
+    }
+  }
+  profile.push(profile[0].clone());
+  const geometry = new LatheGeometry(profile, DISC_3D.segments);
+  // 环与环的公共边界不再各放一面侧壁，避免重叠面形成细碎的黑色闪线。
+  const indices: number[] = [];
+  const source = geometry.getIndex()!;
+  const rows = profile.length - 1;
+  for (let segment = 0; segment < DISC_3D.segments; segment++) {
+    for (let row = 0; row < rows; row++) {
+      const outerWall = row === steps;
+      const sharedInnerWall = row === rows - 1 && inner !== DISC_3D.holeRadius;
+      if (outerWall || sharedInnerWall) continue;
+      const start = (segment * rows + row) * 6;
+      for (let vertex = 0; vertex < 6; vertex++) indices.push(source.getX(start + vertex));
+    }
+  }
+  geometry.setIndex(indices);
+  geometry.computeVertexNormals();
+  geometry.rotateX(Math.PI / 2);
+  return geometry;
+}
 
 /**
  * 把带圆角的截面旋转一周，生成连续的光盘侧壁。

@@ -1,11 +1,11 @@
 import {
-  Group, Mesh, MeshPhysicalMaterial, MeshStandardMaterial,
+  Group, Mesh, MeshPhysicalMaterial,
   RingGeometry, Vector2, type Material, type Texture,
 } from 'three';
 import { createCoverTexture, createPrintSurfaceMaps } from './disc-textures';
-import { DISC_3D, DISC_FINISH } from './disc-config';
+import { DISC_3D, DISC_FINISH, DISC_HUB } from './disc-config';
 import { createSilverFinish } from './disc-materials';
-import { createDiscShell } from './disc-geometry';
+import { createDiscShell, createHubBand } from './disc-geometry';
 import type { Project } from './data';
 
 function ring(inner: number, outer: number) {
@@ -28,7 +28,10 @@ export function createDiscModel(project: Project, index: number, onUpdate: () =>
   group.name = `disc-${project.id}`;
   group.userData.projectId = project.id;
   const shellGeometry = createDiscShell();
-  const edge = new MeshStandardMaterial({ color: '#bec5c8', metalness: .95, roughness: .21 });
+  const edge = new MeshPhysicalMaterial({
+    color: '#c9cfd1', metalness: DISC_FINISH.edgeMetalness, roughness: DISC_FINISH.edgeRoughness,
+    clearcoat: .7, clearcoatRoughness: .08, envMapIntensity: 1,
+  });
   const shell = new Mesh(shellGeometry, edge);
   shell.name = 'physical-edge';
   group.add(shell);
@@ -39,7 +42,7 @@ export function createDiscModel(project: Project, index: number, onUpdate: () =>
     map: cover, roughness: DISC_FINISH.printRoughness, metalness: DISC_FINISH.printMetalness,
     normalMap: printMaps.normal, normalScale: new Vector2(.3, .3), roughnessMap: printMaps.roughness,
     clearcoat: DISC_FINISH.printClearcoat, clearcoatRoughness: .2,
-    envMapIntensity: .45,
+    envMapIntensity: DISC_FINISH.printEnvironment,
   }));
   front.name = 'printed-front';
   front.position.z = .011;
@@ -52,18 +55,32 @@ export function createDiscModel(project: Project, index: number, onUpdate: () =>
   back.position.z = -.011;
   group.add(back);
 
-  const hubMaterial = new MeshPhysicalMaterial({
-    color: '#e5e9ed', metalness: .05, roughness: .3, clearcoat: .6, envMapIntensity: .9,
-    transmission: .65, thickness: .012, ior: 1.5,
+  const frost = new MeshPhysicalMaterial({
+    color: '#bdc3c7', metalness: .18, roughness: .46, clearcoat: .35,
+    transmission: .25, thickness: .025, ior: 1.5, envMapIntensity: .8,
   });
-  const materials: Material[] = [edge, front.material, silver, hubMaterial];
-  for (const sign of [-1, 1]) {
-    const hub = new Mesh(ring(DISC_3D.holeRadius, DISC_3D.hubRadius), hubMaterial);
-    hub.name = 'center-hub';
-    hub.position.z = sign * .012;
-    if (sign < 0) hub.rotation.y = Math.PI;
+  const matrix = new MeshPhysicalMaterial({
+    color: '#bec3c7', metalness: .82, roughness: .28, clearcoat: .55,
+    clearcoatRoughness: .16, envMapIntensity: 1.15,
+  });
+  const polycarbonate = new MeshPhysicalMaterial({
+    color: '#dbe0e4', metalness: .06, roughness: .38, clearcoat: .7,
+    transmission: .68, thickness: .025, ior: 2, envMapIntensity: .85,
+  });
+  const materials: Material[] = [edge, front.material, silver, frost, matrix, polycarbonate];
+  // 三个连续实体环：磨砂孔壁、金属压片环、外侧透明聚碳酸酯。
+  for (const [name, inner, outer, material] of [
+    ['frost-hub', DISC_3D.holeRadius, DISC_HUB.frostOuter, frost],
+    ['matrix-hub', DISC_HUB.frostOuter, DISC_HUB.matrixOuter, matrix],
+    ['clear-hub', DISC_HUB.matrixOuter, DISC_3D.hubRadius, polycarbonate],
+  ] as const) {
+    const hub = new Mesh(createHubBand(inner, outer), material);
+    hub.name = name;
     group.add(hub);
-    for (const [inner, outer] of [[.139, .142], [.193, .196], [.217, .222], [.978, .983]]) {
+  }
+  for (const sign of [-1, 1]) {
+    // 只留外缘的一道细银线，中心的层次交由真实曲面产生。
+    for (const [inner, outer] of [[.985, .988]]) {
       const groove = new Mesh(ring(inner, outer), edge);
       groove.position.z = sign * .013;
       if (sign < 0) groove.rotation.y = Math.PI;

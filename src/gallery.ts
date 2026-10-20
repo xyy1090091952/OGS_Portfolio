@@ -4,6 +4,7 @@ import type { DiscScene } from './disc-scene';
 import { GALLERY_MOTION as MOTION } from './gallery-config';
 import { GalleryMotion, WheelGesture, type MotionSource } from './gallery-motion';
 import { getGalleryLayout, getDiscScreenPlacement } from './disc-layout';
+import type { DiscTransitionDirection } from './disc-transition';
 
 /** 光盘状态只有一份。滚轮、触摸、键盘、索引均改变 target，再由同一动画循环渲染。 */
 export class DiscGallery {
@@ -14,6 +15,7 @@ export class DiscGallery {
   private frame = 0;
   private lastTime = 0;
   private enabled = true;
+  private transitioning = false;
   private pointer: {
     id: number; x: number; y: number; progress: number; moved: boolean;
     lastX: number; lastY: number; lastTime: number; rotationId: string | null;
@@ -34,9 +36,9 @@ export class DiscGallery {
     this.render();
     root.querySelector('[data-prev]')!.addEventListener('click', () => this.step(-1));
     root.querySelector('[data-next]')!.addEventListener('click', () => this.step(1));
-    root.querySelector('[data-explore]')!.addEventListener('click', () => this.onOpen(this.selected));
-    root.querySelector('[data-flip]')!.addEventListener('click', () => this.scene?.flip(this.selected.id));
-    root.querySelector('[data-reset]')!.addEventListener('click', () => this.scene?.reset(this.selected.id));
+    root.querySelector('[data-explore]')!.addEventListener('click', () => { if (this.enabled) this.onOpen(this.selected); });
+    root.querySelector('[data-flip]')!.addEventListener('click', () => { if (this.enabled) this.scene?.flip(this.selected.id); });
+    root.querySelector('[data-reset]')!.addEventListener('click', () => { if (this.enabled) this.scene?.reset(this.selected.id); });
 
     this.stage.addEventListener('click', event => {
       if (!this.enabled) return;
@@ -136,7 +138,7 @@ export class DiscGallery {
     this.stage.addEventListener('pointerleave', () => this.scene?.clearHover());
     window.addEventListener('blur', () => {
       this.cancelPointer();
-      this.scene?.pause();
+      if (!this.transitioning) this.scene?.pause();
       this.wheel.reset();
     });
     this.stage.addEventListener('lostpointercapture', event => {
@@ -146,13 +148,14 @@ export class DiscGallery {
     window.addEventListener('pointerup', event => this.endDrag(event));
     window.addEventListener('resize', () => {
       this.cancelPointer();
+      if (this.transitioning) return;
       this.position();
       this.requestFrame();
     });
     document.addEventListener('visibilitychange', () => {
       if (document.hidden) {
         this.cancelPointer();
-        this.scene?.pause();
+        if (!this.transitioning) this.scene?.pause();
         cancelAnimationFrame(this.frame);
         this.frame = 0;
       } else if (this.enabled) this.requestFrame();
@@ -176,7 +179,8 @@ export class DiscGallery {
       this.root.querySelector<HTMLElement>('.disc-tools')!.hidden = false;
       this.position();
       this.requestFrame();
-    } catch {
+    } catch (error) {
+      console.warn('三维光盘不可用，已启用 CSS 展示', error);
       this.scene?.dispose();
       this.scene = null;
       this.root.classList.remove('has-webgl');
@@ -188,6 +192,8 @@ export class DiscGallery {
   get visibleProjects() { return this.projects; }
 
   setEnabled(enabled: boolean) {
+    if (this.transitioning) return;
+    if (enabled === this.enabled) return;
     this.enabled = enabled;
     if (!enabled) {
       this.cancelPointer();
@@ -204,6 +210,37 @@ export class DiscGallery {
       this.position();
       this.requestFrame();
     }
+  }
+
+  /** 路由只负责何时换页；光盘动画、输入冻结和清理都由画廊自己管理。 */
+  async transition(direction: DiscTransitionDirection, commit: () => void, signal: AbortSignal) {
+    if (!this.scene?.available || this.reducedMotion.matches || document.hidden) { commit(); return; }
+    this.enabled = false;
+    this.transitioning = true;
+    this.cancelPointer();
+    this.wheel.reset();
+    this.motion.hold();
+    cancelAnimationFrame(this.frame);
+    this.frame = 0;
+    this.root.inert = true;
+    this.root.classList.add(direction === 'exit' ? 'is-departing' : 'is-arriving');
+    try {
+      await this.scene.transition(direction, this.selected.id, commit, signal);
+    } finally {
+      this.transitioning = false;
+      this.root.inert = false;
+      this.root.classList.remove('is-departing', 'is-arriving');
+      // 页面已隐藏后再清除悬停，不影响用户看到的离场姿态。
+      if (this.root.hidden) this.scene.pause();
+      else if (signal.aborted) this.motion.goTo(this.active, this.projects.length, 'snap');
+    }
+  }
+
+  prepareReturn() {
+    this.motion.jump(Math.max(0, this.active));
+    this.updateControls();
+    this.position();
+    this.scene?.step(0, this.selected.id);
   }
 
   setFilter(category: Category) {

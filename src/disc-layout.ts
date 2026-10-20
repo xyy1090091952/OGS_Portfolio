@@ -34,8 +34,8 @@ export function getGalleryLayout(width: number, height: number): GalleryLayout {
   }
   return {
     mode: 'desktop', size: Math.min(width * L.desktop.widthRatio, height * L.desktop.heightRatio),
-    spacing: width * L.desktop.spacingRatio, slope: L.desktop.slope,
-    centerX: 0, centerY: 0, visibleRange: 2.5,
+    spacing: Math.max(width * L.desktop.spacingRatio, height * L.desktop.spacingHeightRatio), slope: L.desktop.slope,
+    centerX: 0, centerY: height * L.desktop.centerY, visibleRange: 2.5,
   };
 }
 
