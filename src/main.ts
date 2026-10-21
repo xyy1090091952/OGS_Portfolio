@@ -9,6 +9,7 @@ import { preloadAssets } from './preload-assets';
 import { getPageContent, preloadPages } from './page-cache';
 
 const loader = new LoadingScreen();
+const startup = new AbortController();
 let startupPhase: 'loading' | 'revealing' | 'ready' = 'loading';
 
 document.querySelector('#app')!.innerHTML = `
@@ -230,10 +231,14 @@ content.addEventListener('click', async event => {
   toastTimer = window.setTimeout(() => toast.classList.remove('is-visible'), 3000);
 });
 renderIndex();
-window.addEventListener('hashchange', () => navigate());
+window.addEventListener('hashchange', () => {
+  if (startupPhase === 'ready') navigate();
+  // 入场期间先归还画布，再读取最新 hash；快速前进/后退不会抢走演出中的画布。
+  else startup.abort();
+});
 navigate(true);
 
-/** 等资料、字体、封面和第一帧全部就绪，再把 Loading 接到原有 CD 入场时间轴。 */
+/** 数字先入场，资源就绪后由真实主盘接续升起，最后展开并放开交互。 */
 async function startSite() {
   const assetsReady = preloadAssets(PROJECTS, loader.complete);
   await Promise.all([
@@ -243,33 +248,21 @@ async function startSite() {
     }),
     gallery.prepare(assetsReady, loader.complete),
   ]);
-  await loader.ready();
-  // 加载期间的地址变化以最新 hash 为准，并换成已准备好的详情内容。
+  await navigationTask;
+  await loader.play(currentRoute === 'work' ? gallery.beginOpening() : null, () => {
+    startupPhase = 'revealing';
+    document.body.dataset.boot = 'revealing';
+    document.body.classList.add('is-ready');
+  }, startup.signal);
+  // 先结束 Opening，再更新选择和页面；资料也换成已预生成的缓存版本。
   navigate(true);
   await navigationTask;
-  const controller = navigation!;
-  startupPhase = 'revealing';
-  document.body.dataset.boot = 'revealing';
-  document.body.classList.add('is-ready');
-  if (currentRoute === 'work') gallery.prepareReturn();
-  // 入场归入路由的同一条任务链，新导航会先取消它再执行，避免两个动画抢画布。
-  navigationTask = (async () => {
-    try {
-      await Promise.all([
-        loader.reveal(),
-        currentRoute === 'work' ? gallery.transition('enter', () => {}, controller.signal) : Promise.resolve(),
-      ]);
-    } catch (error) {
-      console.warn('入场动画已回退', error);
-    } finally {
-      startupPhase = 'ready';
-      document.body.dataset.boot = 'ready';
-      const app = document.querySelector<HTMLElement>('#app')!;
-      app.inert = false;
-      app.setAttribute('aria-busy', 'false');
-      gallery.setEnabled(currentRoute === 'work' && !header.classList.contains('index-open'));
-    }
-  })();
-  await navigationTask;
+  startupPhase = 'ready';
+  document.body.dataset.boot = 'ready';
+  document.body.classList.remove('boot-brand', 'boot-nav', 'boot-copy');
+  const app = document.querySelector<HTMLElement>('#app')!;
+  app.inert = false;
+  app.setAttribute('aria-busy', 'false');
+  gallery.setEnabled(currentRoute === 'work' && !header.classList.contains('index-open'));
 }
 void startSite();

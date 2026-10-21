@@ -4,7 +4,7 @@ export const clamp = (value: number, min: number, max: number) => Math.min(max, 
 export type MotionSource = 'wheel' | 'key' | 'click' | 'flick' | 'snap';
 
 /** 贝塞尔曲线先求时间对应的横坐标，再取纵坐标，与 CSS easing 保持一致。 */
-function galleryEase(progress: number) {
+export function galleryEase(progress: number) {
   const [x1, y1, x2, y2] = M.curve;
   const sample = (t: number, a: number, b: number) => 3 * (1 - t) ** 2 * t * a + 3 * (1 - t) * t * t * b + t ** 3;
   let low = 0, high = 1;

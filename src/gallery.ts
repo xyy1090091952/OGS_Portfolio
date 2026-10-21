@@ -6,6 +6,7 @@ import { GalleryMotion, WheelGesture, type MotionSource } from './gallery-motion
 import { getGalleryLayout, getDiscScreenPlacement } from './disc-layout';
 import type { DiscTransitionDirection } from './disc-transition';
 import { LOADING, withDeadline, type LoadingReporter } from './loading-config';
+import type { OpeningDriver } from './disc-opening';
 
 /** 光盘状态只有一份。滚轮、触摸、键盘、索引均改变 target，再由同一动画循环渲染。 */
 export class DiscGallery {
@@ -230,6 +231,28 @@ export class DiscGallery {
     }
   }
 
+  /** 入场期间暂停常规渲染，由 Loading 时间轴独占画布，结束时恢复陈列。 */
+  beginOpening(): OpeningDriver | null {
+    if (!this.scene?.available || this.reducedMotion.matches || document.hidden) return null;
+    this.enabled = false;
+    this.transitioning = true;
+    cancelAnimationFrame(this.frame);
+    this.frame = 0;
+    this.prepareReturn();
+    const driver = this.scene.beginOpening(this.selected.id);
+    return {
+      get available() { return driver.available; },
+      draw: frame => driver.draw(frame),
+      finish: () => {
+        try { driver.finish(); }
+        finally {
+          this.transitioning = false;
+          this.position();
+        }
+      },
+    };
+  }
+
   /** 路由只负责何时换页；光盘动画、输入冻结和清理都由画廊自己管理。 */
   async transition(direction: DiscTransitionDirection, commit: () => void, signal: AbortSignal) {
     if (!this.scene?.available || this.reducedMotion.matches || document.hidden) { commit(); return; }
@@ -416,6 +439,8 @@ export class DiscGallery {
     this.discs = [...this.stage.querySelectorAll<HTMLElement>('.disc')];
     this.scene?.setProjects(this.projects);
     this.position();
+    // 预加载会重建按钮；即使作品没换，也要重新同步选中样式和键盘焦点入口。
+    this.active = -1;
     this.updateMetadata(Math.round(this.motion.current));
     this.updateControls();
   }

@@ -75,6 +75,20 @@ button svg, a svg { width: 18px; height: 18px; }
 /* 原画布暂挂到页面上方，路由交接后仍能完成最后半程的旋转收起。 */
 .disc-transition-layer { position: fixed; inset: 0; width: 100%; height: 100svh; z-index: 60; pointer-events: none; }
 .disc-transition-layer .disc-webgl-canvas { display: block; }
+.disc-opening-layer { z-index: 45; }
+/* 首次入场分开揭示标志、导航和作品资料，画布始终是同一个。 */
+body:not([data-boot="ready"]) { overflow: hidden; }
+body:not([data-boot="ready"]) .site-header { visibility: visible; }
+body:not([data-boot="ready"]) .nav-dock { overflow: hidden; }
+.nav-dock > a, .nav-dock > button { transition: opacity .7s var(--ease), translate .7s var(--ease); }
+body:not([data-boot="ready"]) .nav-dock > * { opacity: 0; translate: 0 110%; }
+body.boot-brand .nav-dock > .nav-logo, body.boot-nav .nav-dock > * { opacity: 1; translate: 0 0; }
+body.boot-nav .nav-dock > :nth-child(3) { transition-delay: .05s; }
+body.boot-nav .nav-dock > :nth-child(4) { transition-delay: .1s; }
+body:not([data-boot="ready"]):not(.boot-nav) .nav-dock::before { opacity: 0; }
+body:not([data-boot="ready"]) .gallery-page > :not(.disc-stage) { opacity: 0; translate: 0 10px; }
+body[data-boot="revealing"] .gallery-page > :not(.disc-stage) { transition: opacity .7s var(--ease), translate .7s var(--ease); }
+body.boot-copy .gallery-page > :not(.disc-stage) { opacity: 1; translate: 0 0; }
 .gallery-page.is-departing > :not(.disc-stage) { opacity: 0; transition: opacity .22s ease; }
 .gallery-page.is-arriving > :not(.disc-stage) { animation: fade-in .5s ease .12s both; }
 .has-webgl .disc-stage { cursor: default; }

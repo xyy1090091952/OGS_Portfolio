@@ -12,6 +12,8 @@ import { getDiscPlacement, getGalleryLayout, type GalleryLayout } from './disc-l
 import { GALLERY_LAYOUT, GALLERY_MOTION } from './gallery-config';
 import { PROJECTS, type Project } from './data';
 import { DISC_TRANSITION, runDiscTimeline, sampleDiscTransition, type DiscTransitionDirection } from './disc-transition';
+import { LOADING } from './loading-config';
+import { openingScale, type OpeningDriver } from './disc-opening';
 
 interface Pose {
   model: DiscModel;
@@ -409,6 +411,84 @@ export class DiscScene {
     textures.forEach(texture => this.renderer.initTexture(texture));
     this.step(0, selectedId);
     this.element.dataset.prepared = 'true';
+  }
+
+  /** 首次加载直接演出真实主盘；与普通路由转场共享 flight，但不同时占用画布。 */
+  beginOpening(selectedId: string): OpeningDriver {
+    const selectedIndex = this.projects.findIndex(project => project.id === selectedId);
+    const selected = this.models.get(selectedId)!;
+    this.pause();
+    const layer = document.createElement('div');
+    layer.className = 'disc-transition-layer disc-opening-layer';
+    layer.setAttribute('aria-hidden', 'true');
+    document.body.append(layer);
+    layer.append(this.element);
+    this.flightLayer = layer;
+    this.element.dataset.opening = 'rising';
+    const resting = selected.model.group.quaternion.clone();
+    const inverseResting = resting.clone().invert();
+    const center = new Vector3();
+    const rotation = new Quaternion();
+    let finished = false;
+    const scene = this;
+    return {
+      get available() { return scene.available; },
+      draw: frame => {
+        const width = layer.clientWidth, height = layer.clientHeight;
+        if (width !== this.width || height !== this.height) {
+          this.updateLayout(getGalleryLayout(width, height), this.progress);
+        }
+        const radius = this.layout.size / 2;
+        const c = LOADING.scene;
+        const restingY = height / 2 + this.layout.centerY;
+        // 留足底部数字和完整盘面的空间，手机地址栏变化时也不会把入场裁掉。
+        const floor = height - frame.fontHeight * 1.85 - radius * c.boost;
+        const drop = Math.max(0, Math.min(c.drop, (floor - restingY) / radius));
+        this.projects.forEach((project, index) => {
+          const pose = this.models.get(project.id)!;
+          const offset = index - selectedIndex;
+          const scale = openingScale(frame, offset);
+          pose.flight.scale.setScalar(Math.max(.001, scale));
+          if (offset) {
+            pose.flight.position.set(0, 0, 0);
+            pose.flight.rotation.set(0, -Math.PI / 2 * (1 - scale), 0);
+            pose.mount.visible = scale > 0 && Math.abs(offset) < this.layout.visibleRange;
+          } else {
+            pose.mount.visible = true;
+            pose.flight.position.set(0, -drop * (1 - frame.rise), -c.depth * (1 - frame.rise));
+            rotation.setFromEuler(new Euler(0, -Math.PI / 2, c.roll * (1 - frame.turn)));
+            rotation.slerp(resting, frame.turn);
+            pose.flight.quaternion.copy(rotation).multiply(inverseResting);
+          }
+        });
+        this.scene.updateMatrixWorld(true);
+        this.camera.updateMatrixWorld();
+        selected.flight.getWorldPosition(center);
+        const distance = this.camera.position.z - center.z;
+        const projectedRadius = selected.mount.scale.x * selected.flight.scale.x * this.camera.position.z / distance;
+        center.project(this.camera);
+        if (!this.lost) this.renderer.render(this.scene, this.camera);
+        this.element.dataset.opening = frame.fan < 0 ? 'rising' : 'fan';
+        this.element.dataset.openingScale = selected.flight.scale.x.toFixed(4);
+        return { x: (center.x + 1) * width / 2, y: (1 - center.y) * height / 2, radius: projectedRadius };
+      },
+      finish: () => {
+        if (finished) return;
+        finished = true;
+        this.models.forEach(pose => {
+          pose.flight.scale.setScalar(1);
+          pose.flight.quaternion.identity();
+          pose.flight.position.set(0, 0, 0);
+        });
+        this.host.append(this.element);
+        layer.remove();
+        this.flightLayer = null;
+        delete this.element.dataset.opening;
+        delete this.element.dataset.openingScale;
+        this.updateLayout(this.layout, this.progress);
+        this.step(0, selectedId);
+      },
+    };
   }
 
   /** 复用原画布跨页演出；临时变换只写 flight，结束或取消后统一清理。 */
