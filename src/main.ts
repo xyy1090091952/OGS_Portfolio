@@ -3,7 +3,7 @@ import './artwork.css';
 import { FILTERS, PROFILE, PROJECTS, type Category } from './data';
 import { DiscGallery } from './gallery';
 import { ICONS } from './pages';
-import { DISC_TRANSITION } from './disc-transition';
+import { PageReveal } from './page-reveal';
 import { LoadingScreen } from './loading-screen';
 import { preloadAssets } from './preload-assets';
 import { getPageContent, preloadPages } from './page-cache';
@@ -32,20 +32,21 @@ document.querySelector('#app')!.innerHTML = `
   <main>
     <section class="gallery-page" aria-label="Old glasses 作品光盘画廊">
       <h1 class="sr-only">Old_glasses — With Creative From Heart</h1>
-      <div class="project-caption" aria-live="polite" aria-atomic="true">
-        <div class="title-mask"><h2 class="metadata-value" data-project-title></h2></div>
+      <div class="project-caption" data-copy-group>
+        <div class="title-mask"><h2 data-copy-text data-project-title></h2></div>
         <dl class="caption-metadata">
-          <div><dt>设计师 / DESIGNER</dt><dd>${PROFILE.name}</dd></div>
-          <div><dt>年份 / YEAR</dt><dd class="metadata-value" data-project-year></dd></div>
-          <div><dt>领域 / CATEGORY</dt><dd class="metadata-value" data-project-category></dd></div>
-          <div><dt>探索 / EXPLORATION</dt><dd class="metadata-value" data-project-tags></dd></div>
+          <div><dt><i class="motion-rule" data-copy-rule aria-hidden="true"></i><span data-copy-text>设计师 / DESIGNER</span></dt><dd data-copy-text>${PROFILE.name}</dd></div>
+          <div><dt><i class="motion-rule" data-copy-rule aria-hidden="true"></i><span data-copy-text>年份 / YEAR</span></dt><dd data-copy-text data-project-year></dd></div>
+          <div><dt><i class="motion-rule" data-copy-rule aria-hidden="true"></i><span data-copy-text>领域 / CATEGORY</span></dt><dd data-copy-text data-project-category></dd></div>
+          <div><dt><i class="motion-rule" data-copy-rule aria-hidden="true"></i><span data-copy-text>探索 / EXPLORATION</span></dt><dd data-copy-text data-project-tags></dd></div>
         </dl>
       </div>
+      <span class="sr-only" data-project-announcement aria-live="polite" aria-atomic="true"></span>
       <div class="archive-label"><span>PERSONAL ARCHIVE</span><span>概念作品集</span></div>
       <div class="disc-stage" role="group" aria-label="鼠标拖动光盘旋转，滚动切换；触屏横滑切换、纵拖旋转；F 翻面，R 归位，方向键切换" tabindex="0"></div>
-      <div class="gallery-notes">
-        <div class="gallery-note"><span class="note-symbol" aria-hidden="true">✳</span><span class="micro">DESIGN PHILOSOPHY</span><p>“WITH CREATIVE<br>FROM HEART.”</p></div>
-        <div class="gallery-note"><span class="note-symbol" aria-hidden="true">✳</span><span class="micro" data-project-label></span><p data-project-quote></p></div>
+      <div class="gallery-notes" data-copy-group>
+        <div class="gallery-note"><span class="note-symbol" data-copy-text aria-hidden="true">✳</span><span class="micro" data-copy-text>DESIGN PHILOSOPHY</span><p data-copy-text>“WITH CREATIVE<br>FROM HEART.”</p></div>
+        <div class="gallery-note"><span class="note-symbol" data-copy-text aria-hidden="true">✳</span><span class="micro" data-copy-text data-project-label></span><p data-copy-text data-project-quote></p></div>
       </div>
       <button class="open-project" data-explore>查看作品 <span>↗</span></button>
       <div class="disc-tools" role="group" aria-label="光盘操作" hidden><button data-flip aria-label="翻转当前光盘">翻面 <span>↻</span></button><button data-reset aria-label="光盘恢复正面角度">归位 <span>↺</span></button></div>
@@ -177,9 +178,6 @@ function navigate(initial = startupPhase !== 'ready') {
       document.body.dataset.route = route;
       content.getAnimations().forEach(animation => animation.cancel());
       content.innerHTML = returning ? '' : getPageContent(project);
-      if (!returning && !initial && !reducedMotion.matches) {
-        content.animate([{ opacity: 0 }, { opacity: 1 }], { duration: DISC_TRANSITION.pageFade, easing: 'ease-out' });
-      }
       document.title = `${project?.title ?? (route === 'about' ? '关于' : '作品')} — Old_glasses`;
       document.querySelectorAll<HTMLElement>('[data-nav]').forEach(link => {
         const active = link.dataset.nav === (route === 'about' ? 'about' : 'work');
@@ -188,6 +186,8 @@ function navigate(initial = startupPhase !== 'ready') {
         else link.removeAttribute('aria-current');
       });
       window.scrollTo({ top: 0, behavior: 'instant' });
+      // 字体就绪、页面交接后再测量文字行；直接打开详情也使用相同的入场。
+      if (!returning) new PageReveal(content, controller.signal, startupPhase !== 'loading' && anchor !== 'design');
       if (!returning && !initial) content.querySelector<HTMLElement>('h1')?.focus({ preventScroll: true });
       if (anchor === 'design') document.querySelector('#design-content')?.scrollIntoView({ behavior: 'instant' });
     };

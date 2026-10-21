@@ -7,6 +7,7 @@ import { getGalleryLayout, getDiscScreenPlacement } from './disc-layout';
 import type { DiscTransitionDirection } from './disc-transition';
 import { LOADING, withDeadline, type LoadingReporter } from './loading-config';
 import type { OpeningDriver } from './disc-opening';
+import { GalleryCaption } from './gallery-caption';
 
 /** 光盘状态只有一份。滚轮、触摸、键盘、索引均改变 target，再由同一动画循环渲染。 */
 export class DiscGallery {
@@ -29,6 +30,7 @@ export class DiscGallery {
   private discs: HTMLElement[] = [];
   private reducedMotion = matchMedia('(prefers-reduced-motion: reduce)');
   private scene: DiscScene | null = null;
+  private caption: GalleryCaption;
 
   constructor(
     private root: HTMLElement,
@@ -36,6 +38,7 @@ export class DiscGallery {
     private onChange: (project: Project) => void,
   ) {
     this.stage = root.querySelector('.disc-stage')!;
+    this.caption = new GalleryCaption(root);
     this.render();
     root.querySelector('[data-prev]')!.addEventListener('click', () => this.step(-1));
     root.querySelector('[data-next]')!.addEventListener('click', () => this.step(1));
@@ -265,12 +268,15 @@ export class DiscGallery {
     this.frame = 0;
     this.root.inert = true;
     this.root.classList.add(direction === 'exit' ? 'is-departing' : 'is-arriving');
+    if (direction === 'exit') this.caption.leave();
+    else this.caption.enter();
     try {
       await this.scene.transition(direction, this.selected.id, commit, signal);
     } finally {
       this.transitioning = false;
       this.root.inert = false;
       this.root.classList.remove('is-departing', 'is-arriving');
+      this.caption.settle();
       // 页面已隐藏后再清除悬停，不影响用户看到的离场姿态。
       if (this.root.hidden) this.scene.pause();
       else if (signal.aborted) this.motion.goTo(this.active, this.projects.length, 'snap');
@@ -342,7 +348,7 @@ export class DiscGallery {
   private goTo(index: number, instant = false, source: MotionSource = 'click') {
     this.motion.goTo(index, this.projects.length, source, instant || this.reducedMotion.matches);
     if (instant || this.reducedMotion.matches) {
-      this.updateMetadata(Math.round(this.motion.current));
+      this.updateMetadata(Math.round(this.motion.current), true);
       this.position();
     }
     this.updateControls();
@@ -410,28 +416,22 @@ export class DiscGallery {
     this.root.querySelector<HTMLButtonElement>('[data-next]')!.disabled = index === this.projects.length - 1;
   }
 
-  private updateMetadata(index: number) {
-    if (index === this.active) return;
+  private updateMetadata(index: number, instant = false) {
+    if (index === this.active) {
+      if (instant) this.caption.show(this.selected, true);
+      return;
+    }
     this.active = index;
     const project = this.selected;
-    this.root.querySelector('[data-project-title]')!.textContent = project.title;
-    this.root.querySelector('[data-project-category]')!.textContent = project.tags[0];
-    this.root.querySelector('[data-project-year]')!.textContent = project.year;
-    this.root.querySelector('[data-project-tags]')!.textContent = project.tags.slice(1).join('\n');
-    this.root.querySelector('[data-project-quote]')!.textContent = project.subtitle;
-    this.root.querySelector('[data-project-label]')!.textContent = project.label;
+    this.caption.show(project, instant);
+    // 无障碍播报只更新一次，不跟随临时文字遮罩反复读出同一内容。
+    this.root.querySelector('[data-project-announcement]')!.textContent = `${project.title}，${project.year}，${project.label}`;
     this.root.querySelector('[data-counter]')!.textContent = `${String(index + 1).padStart(2, '0')} / ${String(this.projects.length).padStart(2, '0')}`;
     this.discs.forEach((disc, i) => {
       disc.classList.toggle('is-active', i === index);
       disc.setAttribute('aria-current', String(i === index));
       disc.tabIndex = i === index ? 0 : -1;
     });
-    if (!this.reducedMotion.matches) {
-      this.root.querySelectorAll('.metadata-value, .gallery-note p').forEach(element => {
-        element.getAnimations().forEach(animation => animation.cancel());
-        element.animate([{ transform: 'translateY(12px)', opacity: 0 }, { transform: 'translateY(0)', opacity: 1 }], { duration: MOTION.duration.wheel, easing: MOTION.cssCurve });
-      });
-    }
     this.onChange(project);
   }
 
@@ -442,7 +442,7 @@ export class DiscGallery {
     this.position();
     // 预加载会重建按钮；即使作品没换，也要重新同步选中样式和键盘焦点入口。
     this.active = -1;
-    this.updateMetadata(Math.round(this.motion.current));
+    this.updateMetadata(Math.round(this.motion.current), true);
     this.updateControls();
   }
 }
