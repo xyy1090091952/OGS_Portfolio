@@ -10,9 +10,8 @@ export const DISC_3D = {
   mobilePixelRatioLimit: 1.5,
   maxRenderPixels: 12_000_000,
   dragRadiansPerDiameter: Math.PI * 2,
-  inertiaDecay: .92,
-  maxAngularSpeed: .065,
-  flipDuration: 720,
+  // 参考站松手后以 power3.out 回到默认姿态。
+  returnDuration: 1200,
   hoverTilt: .21,
   hoverLift: 14,
   hoverScale: .012,

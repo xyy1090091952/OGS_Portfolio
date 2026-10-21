@@ -43,8 +43,6 @@ export class DiscGallery {
     root.querySelector('[data-prev]')!.addEventListener('click', () => this.step(-1));
     root.querySelector('[data-next]')!.addEventListener('click', () => this.step(1));
     root.querySelector('[data-explore]')!.addEventListener('click', () => { if (this.enabled) this.onOpen(this.selected); });
-    root.querySelector('[data-flip]')!.addEventListener('click', () => { if (this.enabled) this.scene?.flip(this.selected.id); });
-    root.querySelector('[data-reset]')!.addEventListener('click', () => { if (this.enabled) this.scene?.reset(this.selected.id); });
 
     this.stage.addEventListener('click', event => {
       if (!this.enabled) return;
@@ -61,11 +59,6 @@ export class DiscGallery {
       if (event.key === 'Enter' && event.target === this.stage) {
         event.preventDefault();
         this.onOpen(this.selected);
-      }
-      if (event.key.toLowerCase() === 'f' || event.key.toLowerCase() === 'r') {
-        event.preventDefault();
-        if (event.key.toLowerCase() === 'f') this.scene?.flip(this.selected.id);
-        else this.scene?.reset(this.selected.id);
       }
       if (['ArrowRight', 'ArrowDown', 'ArrowLeft', 'ArrowUp', 'Home', 'End'].includes(event.key)) {
         event.preventDefault();
@@ -124,7 +117,7 @@ export class DiscGallery {
       const now = performance.now();
       const elapsed = Math.max(8, now - pointer.lastTime);
       if (pointer.mode === 'rotate') {
-        this.scene?.rotate(pointer.rotationId!, event.clientX - pointer.lastX, event.clientY - pointer.lastY, event.clientX, event.clientY, elapsed);
+        this.scene?.rotate(pointer.rotationId!, event.clientX - pointer.lastX, event.clientY - pointer.lastY, event.clientX, event.clientY);
       } else {
         const { spacing } = this.geometry();
         const distance = pointer.mode === 'browse-x' ? -dx : dy;
@@ -184,13 +177,11 @@ export class DiscGallery {
       this.render();
       const scene = new DiscScene(this.stage, () => this.requestFrame(), available => {
         this.root.classList.toggle('has-webgl', available);
-        this.root.querySelector<HTMLElement>('.disc-tools')!.hidden = !available;
         this.requestFrame();
       });
       this.scene = scene;
       scene.setProjects(this.projects);
       this.root.classList.add('has-webgl');
-      this.root.querySelector<HTMLElement>('.disc-tools')!.hidden = false;
       this.position();
       report('models');
       await withDeadline(scene.warmup(this.selected.id), LOADING.sceneTimeout);
@@ -200,7 +191,6 @@ export class DiscGallery {
       this.scene?.dispose();
       this.scene = null;
       this.root.classList.remove('has-webgl');
-      this.root.querySelector<HTMLElement>('.disc-tools')!.hidden = true;
       await assetsReady;
       this.render();
       // 回退展示也属于完成准备，不让不支持 WebGL 的设备停在 Loading。
@@ -329,7 +319,7 @@ export class DiscGallery {
     if (this.stage.hasPointerCapture(pointer.id)) this.stage.releasePointerCapture(pointer.id);
     const stale = performance.now() - pointer.lastTime > MOTION.stalePointer;
     if (pointer.mode === 'rotate') {
-      this.scene?.endRotation(cancel || stale);
+      this.scene?.endRotation();
       this.goTo(Math.round(this.motion.current), false, 'snap');
     } else if (pointer.moved) {
       this.motion.release(stale ? 0 : pointer.velocity, this.projects.length, this.reducedMotion.matches, cancel);

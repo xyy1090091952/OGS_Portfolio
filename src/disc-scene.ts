@@ -15,6 +15,11 @@ import { DISC_TRANSITION, runDiscTimeline, sampleDiscTransition, type DiscTransi
 import { LOADING } from './loading-config';
 import { openingScale, type OpeningDriver } from './disc-opening';
 
+interface RotationTween {
+  from: Quaternion;
+  elapsed: number;
+}
+
 interface Pose {
   model: DiscModel;
   mount: Group;
@@ -27,14 +32,10 @@ interface Pose {
   hoverTarget: Vector3;
   hoverVelocity: Vector3;
   perspectiveScale: number;
-  velocity: Vector3;
-  from: Quaternion;
-  target: Quaternion | null;
-  elapsed: number;
+  rotation: RotationTween | null;
 }
 
 const BASE_ROTATION = new Quaternion().setFromEuler(new Euler(-Math.PI / 6, -Math.PI / 6, 0));
-const Y_AXIS = new Vector3(0, 1, 0);
 
 /** 渲染层不管理作品选择；只接收画廊的位置，并维护每张光盘自己的三维姿态。 */
 export class DiscScene {
@@ -131,7 +132,7 @@ export class DiscScene {
           model, mount, flight, flow, lean: 0, followProgress: this.progress,
           response, hover: new Vector3(), hoverTarget: new Vector3(), hoverVelocity: new Vector3(),
           perspectiveScale: 1,
-          velocity: new Vector3(), from: new Quaternion(), target: null, elapsed: 0,
+          rotation: null,
         });
       }
       this.models.get(project.id)!.mount.visible = true;
@@ -291,11 +292,11 @@ export class DiscScene {
     pose.hoverVelocity.set(0, 0, 0);
     pose.response.quaternion.identity();
     this.clearHover();
-    pose.target = null;
-    pose.velocity.set(0, 0, 0);
+    // 接管正在归位的当前四元数，不回放旧起点，连着拖动也不会跳角度。
+    pose.rotation = null;
   }
 
-  rotate(id: string, dx: number, dy: number, clientX: number, clientY: number, elapsed: number) {
+  rotate(id: string, dx: number, dy: number, clientX: number, clientY: number) {
     const pose = this.models.get(id);
     if (!pose) return;
     const sensitivity = DISC_3D.dragRadiansPerDiameter / this.layout.size;
@@ -307,36 +308,36 @@ export class DiscScene {
     const radialY = (clientY - centerY) / this.layout.size;
     const delta = new Vector3(dy * sensitivity, dx * sensitivity, (radialY * dx - radialX * dy) * sensitivity * .6);
     this.applyDelta(pose, delta);
-    // 记录角速度而非最后一个像素位移，避免高刷新率与低刷新率设备手感不同。
-    pose.velocity.copy(delta).multiplyScalar(16.67 / Math.max(8, elapsed)).clampLength(0, DISC_3D.maxAngularSpeed);
     this.wake();
   }
 
-  endRotation(cancel = false) {
-    if (this.dragging && (cancel || this.reduced.matches)) this.models.get(this.dragging)?.velocity.set(0, 0, 0);
+  endRotation() {
+    const pose = this.dragging ? this.models.get(this.dragging) : undefined;
     this.dragging = null;
-    this.wake();
+    // 松手或触摸被取消都自动回到陈列姿态，不停留在任意倾斜角度。
+    if (pose) this.returnToRest(pose);
   }
 
-  flip(id: string) {
-    const pose = this.models.get(id);
-    if (!pose) return;
-    const target = pose.model.group.quaternion.clone().premultiply(new Quaternion().setFromAxisAngle(Y_AXIS, Math.PI));
-    this.animateTo(pose, target);
-  }
-
-  reset(id: string) {
-    const pose = this.models.get(id);
-    if (pose) this.animateTo(pose, BASE_ROTATION);
-  }
-
-  private animateTo(pose: Pose, target: Quaternion) {
+  private returnToRest(pose: Pose) {
     this.clearHover();
-    pose.velocity.set(0, 0, 0);
-    pose.from.copy(pose.model.group.quaternion);
-    pose.target = target.clone();
-    pose.elapsed = 0;
+    pose.rotation = { from: pose.model.group.quaternion.clone(), elapsed: 0 };
+    if (this.reduced.matches) this.stepRotation(pose, 0);
     this.wake();
+  }
+
+  /** 自动归位只改变盘面姿态，不改光盘的排列位置。 */
+  private stepRotation(pose: Pose, dt: number) {
+    const rotation = pose.rotation;
+    if (!rotation) return false;
+    rotation.elapsed += dt;
+    const t = this.reduced.matches ? 1 : Math.min(1, rotation.elapsed / DISC_3D.returnDuration);
+    const eased = 1 - Math.pow(1 - t, 4);
+    pose.model.group.quaternion.slerpQuaternions(rotation.from, BASE_ROTATION, eased);
+    if (t === 1) {
+      pose.model.group.quaternion.copy(BASE_ROTATION);
+      pose.rotation = null;
+    }
+    return t < 1;
   }
 
   private applyDelta(pose: Pose, delta: Vector3) {
@@ -351,6 +352,8 @@ export class DiscScene {
     this.updateHoverTarget();
     let busy = this.layoutBusy;
     this.models.forEach((pose, id) => {
+      // 已滑出屏幕的光盘也完成归位，切回来时不会带着半途停住的姿态。
+      if (this.stepRotation(pose, dt)) busy = true;
       if (!pose.mount.visible) return;
       const flow = GALLERY_MOTION.flow;
       const targetLean = this.reduced.matches || this.dragging === id ? 0
@@ -360,21 +363,6 @@ export class DiscScene {
       else busy = true;
       pose.flow.rotation.set(Math.abs(pose.lean) * flow.dip, pose.lean, pose.lean * flow.bank);
       if (this.stepHover(pose, dt)) busy = true;
-      if (pose.target) {
-        pose.elapsed += dt;
-        const t = this.reduced.matches ? 1 : Math.min(1, pose.elapsed / DISC_3D.flipDuration);
-        const eased = t < .5 ? 4 * t * t * t : 1 - Math.pow(-2 * t + 2, 3) / 2;
-        pose.model.group.quaternion.slerpQuaternions(pose.from, pose.target, eased);
-        if (t === 1) pose.target = null;
-        else busy = true;
-      } else if (id !== this.dragging && pose.velocity.lengthSq() > .0000005) {
-        if (this.reduced.matches) pose.velocity.set(0, 0, 0);
-        else {
-          this.applyDelta(pose, pose.velocity.clone().multiplyScalar(dt / 16.67));
-          pose.velocity.multiplyScalar(Math.pow(DISC_3D.inertiaDecay, dt / 16.67));
-          busy = true;
-        }
-      }
     });
     const selected = this.models.get(selectedId);
     if (selected) {
@@ -385,6 +373,7 @@ export class DiscScene {
       this.element.dataset.hover = this.hovered ?? '';
       this.element.dataset.hoverOffset = selected.hover.toArray().map(n => n.toFixed(4)).join(',');
       this.element.dataset.flow = selected.lean.toFixed(4);
+      this.element.dataset.rotationState = this.dragging === selectedId ? 'dragging' : selected.rotation ? 'return' : 'idle';
     }
     const highlighted = this.hovered ? this.models.get(this.hovered) : null;
     this.scene.updateMatrixWorld(true);
@@ -503,11 +492,9 @@ export class DiscScene {
     this.flightLayer = layer;
     this.highlight.hide();
     this.element.dataset.transition = direction;
-    // 冻结眼前的旋转，不先归位；包括点击前的 hover / 手动翻面。
+    // 转场期间暂停自动归位，保留点击瞬间的姿态；回到画廊后继续完成。
     const turns = new Map<string, Quaternion>();
     this.models.forEach((pose, id) => {
-      pose.velocity.set(0, 0, 0);
-      pose.target = null;
       const visible = pose.model.group.quaternion.clone().premultiply(pose.response.quaternion).premultiply(pose.flow.quaternion);
       const side = new Quaternion().setFromEuler(new Euler(0, Math.PI / 2, 0));
       turns.set(id, side.multiply(visible.invert()));
@@ -559,7 +546,6 @@ export class DiscScene {
     this.clearHover();
     this.highlight.hide();
     this.models.forEach(pose => {
-      pose.velocity.set(0, 0, 0);
       pose.lean = 0;
       pose.flow.quaternion.identity();
       pose.hover.set(0, 0, 0);
