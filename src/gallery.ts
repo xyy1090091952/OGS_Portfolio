@@ -396,7 +396,8 @@ export class DiscGallery {
       // CSS 回退与三维场景一致：左下方较早的光盘遮住右上方后续光盘。
       disc.style.zIndex = String(20 + this.projects.length - index);
       const offscreen = Math.abs(offset) >= layout.visibleRange;
-      disc.style.visibility = offscreen ? 'hidden' : 'visible';
+      // 屏内光盘继承页面显隐；显式 visible 会越过 Loading 的父级 hidden，导致首帧闪盘。
+      disc.style.visibility = offscreen ? 'hidden' : '';
       disc.setAttribute('aria-hidden', String(offscreen));
     });
   }
