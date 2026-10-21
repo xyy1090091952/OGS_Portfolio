@@ -1,5 +1,6 @@
 import { CanvasTexture, SRGBColorSpace } from 'three';
 import type { Project } from './data';
+import { getCoverImage } from './preload-assets';
 
 const RESOLUTION = 1024;
 
@@ -12,7 +13,7 @@ function canvas() {
 }
 
 /** 直接绘制印刷纹理，不把整个网页截图作为贴图，文字与素材仍来自同一份作品数据。 */
-export function createCoverTexture(project: Project, index: number, onUpdate: () => void): CanvasTexture {
+export function createCoverTexture(project: Project, index: number): CanvasTexture {
   const { element, ctx } = canvas();
   const texture = new CanvasTexture(element);
   texture.colorSpace = SRGBColorSpace;
@@ -41,20 +42,13 @@ export function createCoverTexture(project: Project, index: number, onUpdate: ()
   };
   ctx.fillStyle = project.color;
   ctx.fillRect(0, 0, 1000, 1000);
-  drawArtwork(ctx, project.artwork);
+  const image = getCoverImage(project.image);
+  if (image) {
+    const side = Math.min(image.naturalWidth, image.naturalHeight);
+    ctx.drawImage(image, (image.naturalWidth - side) / 2, (image.naturalHeight - side) / 2, side, side, 0, 0, 1000, 1000);
+  } else drawArtwork(ctx, project.artwork);
+  // 字体与封面在建模前已经准备好，标签只绘制一次。
   paintLabels();
-  if (project.image) {
-    const image = new Image();
-    image.crossOrigin = 'anonymous';
-    image.onload = () => {
-      const side = Math.min(image.width, image.height);
-      ctx.drawImage(image, (image.width - side) / 2, (image.height - side) / 2, side, side, 0, 0, 1000, 1000);
-      paintLabels();
-      // 场景静止时不持续渲染；图片加载完成后主动请求一帧更新封面。
-      onUpdate();
-    };
-    image.src = project.image;
-  }
   return texture;
 }
 

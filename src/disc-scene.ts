@@ -1,6 +1,6 @@
 import {
   ACESFilmicToneMapping, AmbientLight, DirectionalLight, Euler, Group, MathUtils, PerspectiveCamera,
-  Quaternion, Raycaster, RectAreaLight, Scene, Vector2, Vector3, WebGLRenderer,
+  Mesh, Quaternion, Raycaster, RectAreaLight, Scene, Texture, Vector2, Vector3, WebGLRenderer,
   type WebGLRenderTarget,
 } from 'three';
 import { createDiscModel, type DiscModel } from './disc-model';
@@ -113,7 +113,7 @@ export class DiscScene {
     this.models.forEach(pose => { pose.mount.visible = false; });
     projects.forEach(project => {
       if (!this.models.has(project.id)) {
-        const model = createDiscModel(project, PROJECTS.indexOf(project), this.wake);
+        const model = createDiscModel(project, PROJECTS.indexOf(project));
         const mount = new Group();
         // 陈列 > 页面转场 > 运动倾斜 > 悬停 > 手动姿态，各层可独立复位。
         const flight = new Group();
@@ -145,7 +145,8 @@ export class DiscScene {
     this.flowVelocity = velocity;
     this.layoutBusy = false;
     const viewport = this.flightLayer ?? this.host;
-    const width = viewport.clientWidth, height = viewport.clientHeight;
+    // 直接打开详情时画廊隐藏，仍按视口预热，返回首页无需第一次编译。
+    const width = viewport.clientWidth || innerWidth, height = viewport.clientHeight || innerHeight;
     if (!width || !height || this.lost) return;
     const ratioLimit = width <= GALLERY_LAYOUT.phoneWidth ? DISC_3D.mobilePixelRatioLimit : DISC_3D.pixelRatioLimit;
     const ratio = Math.min(devicePixelRatio, ratioLimit, Math.sqrt(DISC_3D.maxRenderPixels / (width * height)));
@@ -392,6 +393,23 @@ export class DiscScene {
   }
 
   get available() { return !this.lost && this.width > 0; }
+
+  /** 提前编译材质并上传正反面贴图，首次入场和第一次翻面都不再临时准备。 */
+  async warmup(selectedId: string) {
+    await this.renderer.compileAsync(this.scene, this.camera);
+    if (this.lost) throw new Error('图形上下文不可用');
+    const textures = new Set<Texture>();
+    this.scene.traverse(object => {
+      if (!(object instanceof Mesh)) return;
+      const materials = Array.isArray(object.material) ? object.material : [object.material];
+      materials.forEach(material => Object.values(material).forEach(value => {
+        if (value instanceof Texture) textures.add(value);
+      }));
+    });
+    textures.forEach(texture => this.renderer.initTexture(texture));
+    this.step(0, selectedId);
+    this.element.dataset.prepared = 'true';
+  }
 
   /** 复用原画布跨页演出；临时变换只写 flight，结束或取消后统一清理。 */
   async transition(direction: DiscTransitionDirection, selectedId: string, commit: () => void, signal: AbortSignal) {

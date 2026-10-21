@@ -2,8 +2,14 @@ import './style.css';
 import './artwork.css';
 import { FILTERS, PROFILE, PROJECTS, type Category } from './data';
 import { DiscGallery } from './gallery';
-import { aboutPage, ICONS, projectPage } from './pages';
+import { ICONS } from './pages';
 import { DISC_TRANSITION } from './disc-transition';
+import { LoadingScreen } from './loading-screen';
+import { preloadAssets } from './preload-assets';
+import { getPageContent, preloadPages } from './page-cache';
+
+const loader = new LoadingScreen();
+let startupPhase: 'loading' | 'revealing' | 'ready' = 'loading';
 
 document.querySelector('#app')!.innerHTML = `
   <header class="site-header">
@@ -88,7 +94,7 @@ function setMenu(open: boolean, restoreFocus = false, syncGallery = true) {
   indexToggle.setAttribute('aria-expanded', String(open));
   menu.inert = !open;
   backdrop.hidden = !open;
-  if (syncGallery) gallery.setEnabled(!open && currentRoute === 'work');
+  if (syncGallery) gallery.setEnabled(!open && currentRoute === 'work' && startupPhase === 'ready');
   if (restoreFocus) indexToggle.focus();
 }
 indexToggle.addEventListener('click', () => setMenu(indexToggle.getAttribute('aria-expanded') !== 'true'));
@@ -117,6 +123,7 @@ menu.addEventListener('click', event => {
   }
 });
 document.addEventListener('keydown', event => {
+  if (startupPhase !== 'ready') return;
   if (event.key !== 'Escape') return;
   if (header.classList.contains('index-open')) setMenu(false, true);
   else if (!document.querySelector<HTMLElement>('.gallery-help')!.hidden) setHelp(false);
@@ -130,7 +137,7 @@ function setHelp(open: boolean) {
 document.querySelector('.help-toggle')!.addEventListener('click', () => setHelp(document.querySelector<HTMLElement>('.gallery-help')!.hidden));
 
 /** 最新一次导航拥有换页权；先取消并清理旧动画，避免快速前进/后退留下旧画布。 */
-function navigate(initial = false) {
+function navigate(initial = startupPhase !== 'ready') {
   const generation = ++navigationId;
   navigation?.abort();
   const controller = new AbortController();
@@ -147,7 +154,7 @@ function navigate(initial = false) {
     setMenu(false, false, false);
     setHelp(false);
     if (!initial && route === currentRoute) {
-      gallery.setEnabled(route === 'work');
+      gallery.setEnabled(route === 'work' && startupPhase === 'ready');
       indexToggle.disabled = false;
       delete document.body.dataset.routeTransition;
       if (anchor === 'design') document.querySelector('#design-content')?.scrollIntoView({ behavior: reducedMotion.matches ? 'instant' : 'smooth' });
@@ -168,7 +175,7 @@ function navigate(initial = false) {
       document.body.classList.toggle('reading-page', !returning);
       document.body.dataset.route = route;
       content.getAnimations().forEach(animation => animation.cancel());
-      content.innerHTML = returning ? '' : project ? projectPage(project) : aboutPage();
+      content.innerHTML = returning ? '' : getPageContent(project);
       if (!returning && !initial && !reducedMotion.matches) {
         content.animate([{ opacity: 0 }, { opacity: 1 }], { duration: DISC_TRANSITION.pageFade, easing: 'ease-out' });
       }
@@ -199,7 +206,7 @@ function navigate(initial = false) {
       update();
     } finally {
       if (generation === navigationId) {
-        gallery.setEnabled(currentRoute === 'work');
+        gallery.setEnabled(currentRoute === 'work' && startupPhase === 'ready');
         indexToggle.disabled = false;
         delete document.body.dataset.routeTransition;
         if (returning && !initial) galleryElement.querySelector<HTMLElement>('.disc-stage')?.focus({ preventScroll: true });
@@ -225,4 +232,44 @@ content.addEventListener('click', async event => {
 renderIndex();
 window.addEventListener('hashchange', () => navigate());
 navigate(true);
-requestAnimationFrame(() => document.body.classList.add('is-ready'));
+
+/** 等资料、字体、封面和第一帧全部就绪，再把 Loading 接到原有 CD 入场时间轴。 */
+async function startSite() {
+  const assetsReady = preloadAssets(PROJECTS, loader.complete);
+  await Promise.all([
+    assetsReady.then(() => {
+      preloadPages();
+      loader.complete('pages');
+    }),
+    gallery.prepare(assetsReady, loader.complete),
+  ]);
+  await loader.ready();
+  // 加载期间的地址变化以最新 hash 为准，并换成已准备好的详情内容。
+  navigate(true);
+  await navigationTask;
+  const controller = navigation!;
+  startupPhase = 'revealing';
+  document.body.dataset.boot = 'revealing';
+  document.body.classList.add('is-ready');
+  if (currentRoute === 'work') gallery.prepareReturn();
+  // 入场归入路由的同一条任务链，新导航会先取消它再执行，避免两个动画抢画布。
+  navigationTask = (async () => {
+    try {
+      await Promise.all([
+        loader.reveal(),
+        currentRoute === 'work' ? gallery.transition('enter', () => {}, controller.signal) : Promise.resolve(),
+      ]);
+    } catch (error) {
+      console.warn('入场动画已回退', error);
+    } finally {
+      startupPhase = 'ready';
+      document.body.dataset.boot = 'ready';
+      const app = document.querySelector<HTMLElement>('#app')!;
+      app.inert = false;
+      app.setAttribute('aria-busy', 'false');
+      gallery.setEnabled(currentRoute === 'work' && !header.classList.contains('index-open'));
+    }
+  })();
+  await navigationTask;
+}
+void startSite();

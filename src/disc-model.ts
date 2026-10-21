@@ -23,7 +23,7 @@ export interface DiscModel {
 }
 
 /** 带真实中心孔的实体模型；正面、背面与侧边分别赋材质，不用镜像封面冒充背面。 */
-export function createDiscModel(project: Project, index: number, onUpdate: () => void): DiscModel {
+export function createDiscModel(project: Project, index: number): DiscModel {
   const group = new Group();
   group.name = `disc-${project.id}`;
   group.userData.projectId = project.id;
@@ -36,7 +36,7 @@ export function createDiscModel(project: Project, index: number, onUpdate: () =>
   shell.name = 'physical-edge';
   group.add(shell);
 
-  const cover = createCoverTexture(project, index, onUpdate);
+  const cover = createCoverTexture(project, index);
   const printMaps = createPrintSurfaceMaps();
   const front = new Mesh(ring(DISC_3D.hubRadius, .993), new MeshPhysicalMaterial({
     map: cover, roughness: DISC_FINISH.printRoughness, metalness: DISC_FINISH.printMetalness,

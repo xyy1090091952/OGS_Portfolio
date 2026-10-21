@@ -1,5 +1,4 @@
-@import url('https://fonts.googleapis.com/css2?family=Bodoni+Moda:opsz,wght@6..96,400&family=DM+Sans:wght@400;500;600;700&display=swap');
-
+/* 字体由启动流程从本地 WOFF2 预加载，进入页面后不再等待外部字体服务。 */
 /* 与原站一致的全屏编辑式构图：小导航、贴边资料、白色空间、斜向光盘。 */
 :root {
   font-family: 'DM Sans', 'PingFang SC', sans-serif;

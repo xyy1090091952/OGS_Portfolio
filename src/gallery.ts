@@ -5,6 +5,7 @@ import { GALLERY_MOTION as MOTION } from './gallery-config';
 import { GalleryMotion, WheelGesture, type MotionSource } from './gallery-motion';
 import { getGalleryLayout, getDiscScreenPlacement } from './disc-layout';
 import type { DiscTransitionDirection } from './disc-transition';
+import { LOADING, withDeadline, type LoadingReporter } from './loading-config';
 
 /** 光盘状态只有一份。滚轮、触摸、键盘、索引均改变 target，再由同一动画循环渲染。 */
 export class DiscGallery {
@@ -14,8 +15,9 @@ export class DiscGallery {
   private wheel = new WheelGesture();
   private frame = 0;
   private lastTime = 0;
-  private enabled = true;
+  private enabled = false;
   private transitioning = false;
+  private preparation: Promise<void> | null = null;
   private pointer: {
     id: number; x: number; y: number; progress: number; moved: boolean;
     lastX: number; lastY: number; lastTime: number; rotationId: string | null;
@@ -161,13 +163,21 @@ export class DiscGallery {
       } else if (this.enabled) this.requestFrame();
     });
     this.reducedMotion.addEventListener('change', () => this.requestFrame());
-    void this.initializeScene();
   }
 
-  private async initializeScene() {
+  prepare(assetsReady: Promise<void>, report: LoadingReporter) {
+    return this.preparation ??= this.initializeScene(assetsReady, report);
+  }
+
+  private async initializeScene(assetsReady: Promise<void>, report: LoadingReporter) {
     try {
-      // 独立加载 3D 模块：页面和可访问操作先可用，WebGL 不可用时保留原有陈列。
-      const { DiscScene } = await import('./disc-scene');
+      // 3D 模块与资源并行下载，字体和封面准备完成后才绘制盘面。
+      const moduleReady = withDeadline(import('./disc-scene'), LOADING.sceneTimeout).then(module => {
+        report('module');
+        return module;
+      });
+      const [{ DiscScene }] = await Promise.all([moduleReady, assetsReady]);
+      this.render();
       const scene = new DiscScene(this.stage, () => this.requestFrame(), available => {
         this.root.classList.toggle('has-webgl', available);
         this.root.querySelector<HTMLElement>('.disc-tools')!.hidden = !available;
@@ -178,13 +188,21 @@ export class DiscGallery {
       this.root.classList.add('has-webgl');
       this.root.querySelector<HTMLElement>('.disc-tools')!.hidden = false;
       this.position();
-      this.requestFrame();
+      report('models');
+      await withDeadline(scene.warmup(this.selected.id), LOADING.sceneTimeout);
+      report('render');
     } catch (error) {
       console.warn('三维光盘不可用，已启用 CSS 展示', error);
       this.scene?.dispose();
       this.scene = null;
       this.root.classList.remove('has-webgl');
       this.root.querySelector<HTMLElement>('.disc-tools')!.hidden = true;
+      await assetsReady;
+      this.render();
+      // 回退展示也属于完成准备，不让不支持 WebGL 的设备停在 Loading。
+      report('module');
+      report('models');
+      report('render');
     }
   }
 
